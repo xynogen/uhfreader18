@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uhfreader18"
+version = "0.1.0"
+description = "UHFReader18 command, response, and TCP push-stream library"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Muhammad Fikri" }]
+keywords = ["RFID", "UHF", "UHFReader18"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/xynogen/uhfreader18"
+Repository = "https://github.com/xynogen/uhfreader18"
+Issues = "https://github.com/xynogen/uhfreader18/issues"
+
+[project.scripts]
+uhfreader18-server = "uhfreader18.server:main"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "coverage>=7",
+  "pyright>=1.1",
+  "pytest>=8",
+  "pytest-timeout>=2.2",
+  "ruff>=0.9",
+  "twine>=5",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+uhfreader18 = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --timeout=10"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"
