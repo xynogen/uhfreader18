@@ -139,6 +139,12 @@ Observed heartbeat:
 56 00 00 00 00 00
 ```
 
+Further reading:
+
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md): TCP push protocol, frame layout, pcap dissection
+- [`docs/DOCUMENTATION.md`](docs/DOCUMENTATION.md): full RS232/RS485 command set from the UHFReader18 User's Manual V2.0
+- [`docs/captures/`](docs/captures/): packet captures
+
 ## Package Relationship
 
 ```mermaid
