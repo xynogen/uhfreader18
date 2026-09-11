@@ -115,5 +115,30 @@ class MemBank(enum.IntEnum):
     USER = 0x03
 
 
+class ReaderType(enum.IntEnum):
+    """Reader model, from the reader-type byte in Get Reader Info (0x21)."""
+
+    UHFREADER18 = 0x09
+
+
+class Protocol(enum.IntFlag):
+    """Air-interface protocol support (protocol byte, bitfield).
+
+    bit0 = ISO 18000-6B, bit1 = ISO 18000-6C (EPC C1 Gen2).
+    """
+
+    ISO18000_6B = 0b01
+    ISO18000_6C = 0b10
+
+
+class FreqBand(enum.IntEnum):
+    """Frequency band, encoded in bit7-bit6 of the max/min frequency bytes."""
+
+    USER = 0b00
+    CHINESE_2 = 0b01
+    US = 0b10
+    KOREAN = 0b11
+
+
 class FrameError(Exception):
     """Raised when a frame fails validation."""

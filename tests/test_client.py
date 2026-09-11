@@ -9,7 +9,10 @@ import pytest
 
 from uhfreader18 import (
     Command,
+    FreqBand,
+    Protocol,
     ReaderInfo,
+    ReaderType,
     RfidClient,
     Status,
     WorkModeInfo,
@@ -394,3 +397,31 @@ def test_rejects_mismatched_command(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.raises(ConnectionError, match="Unexpected response command"),
     ):
         client.get_reader_info()
+
+
+class TestReaderInfoDecoding:
+    def test_reader_model_known(self) -> None:
+        info = ReaderInfo(0, "2.36", 0x09, 0x03, 0x20, 0x00, 30, 10)
+        assert info.reader_model is ReaderType.UHFREADER18
+
+    def test_reader_model_unknown_is_none(self) -> None:
+        info = ReaderInfo(0, "2.36", 0xAB, 0x03, 0x20, 0x00, 30, 10)
+        assert info.reader_model is None
+
+    def test_protocols_both(self) -> None:
+        info = ReaderInfo(0, "2.36", 0x09, 0x03, 0x20, 0x00, 30, 10)
+        assert info.protocols is Protocol.ISO18000_6B | Protocol.ISO18000_6C
+        assert Protocol.ISO18000_6C in info.protocols
+
+    def test_protocols_6c_only(self) -> None:
+        info = ReaderInfo(0, "2.36", 0x09, 0x02, 0x20, 0x00, 30, 10)
+        assert info.protocols is Protocol.ISO18000_6C
+        assert Protocol.ISO18000_6B not in info.protocols
+
+    def test_freq_band_and_index(self) -> None:
+        # max_freq 0x82 = band bit7-6 = 0b10 (US), index bit5-0 = 2
+        info = ReaderInfo(0, "2.36", 0x09, 0x03, 0x82, 0x40, 30, 10)
+        assert info.max_band is FreqBand.US
+        assert info.max_freq_index == 2
+        assert info.min_band is FreqBand.CHINESE_2
+        assert info.min_freq_index == 0

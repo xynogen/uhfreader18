@@ -7,7 +7,7 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("uhfreader18")
 except PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.2.1"
+    __version__ = "0.3.0"
 
 from .builder import (
     build_command_frame,
@@ -24,7 +24,15 @@ from .client import (
     WorkModeInfo,
     parse_response,
 )
-from .constants import Command, FrameError, MemBank, Status
+from .constants import (
+    Command,
+    FrameError,
+    FreqBand,
+    MemBank,
+    Protocol,
+    ReaderType,
+    Status,
+)
 from .frame import Frame, Heartbeat, validate_frame
 from .stream import ParseResult, StreamBuffer
 from .utils import hex_readable
@@ -33,10 +41,13 @@ __all__ = [
     "Command",
     "Frame",
     "FrameError",
+    "FreqBand",
     "Heartbeat",
     "MemBank",
     "ParseResult",
+    "Protocol",
     "ReaderInfo",
+    "ReaderType",
     "RfidClient",
     "RfidResponse",
     "Status",

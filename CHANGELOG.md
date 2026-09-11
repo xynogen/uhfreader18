@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Add `ReaderType`, `Protocol` (bitfield), and `FreqBand` enums.
+- Decode reader-info bytes via `ReaderInfo` properties: `reader_model`,
+  `protocols`, `max_band`/`min_band`, `max_freq_index`/`min_freq_index`.
+
 ## 0.2.1
 
 - Expose `__version__` on top-level `uhfreader18` package.

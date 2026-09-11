@@ -9,7 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 
 from .builder import build_command_frame
-from .constants import Command, Status
+from .constants import Command, FreqBand, Protocol, ReaderType, Status
 from .frame import Frame, validate_frame
 from .stream import StreamBuffer
 
@@ -66,6 +66,39 @@ class ReaderInfo:
     min_freq: int
     power: int
     scan_time: int
+
+    @property
+    def reader_model(self) -> ReaderType | None:
+        """Decoded reader model, or None if the type byte is unknown."""
+        try:
+            return ReaderType(self.reader_type)
+        except ValueError:
+            return None
+
+    @property
+    def protocols(self) -> Protocol:
+        """Supported air-interface protocols decoded from the protocol byte."""
+        return Protocol(self.protocol_type & 0b11)
+
+    @property
+    def max_band(self) -> FreqBand:
+        """Frequency band of the maximum frequency (bit7-6)."""
+        return FreqBand(self.max_freq >> 6)
+
+    @property
+    def min_band(self) -> FreqBand:
+        """Frequency band of the minimum frequency (bit7-6)."""
+        return FreqBand(self.min_freq >> 6)
+
+    @property
+    def max_freq_index(self) -> int:
+        """Frequency channel index of the maximum frequency (bit5-0)."""
+        return self.max_freq & 0b111111
+
+    @property
+    def min_freq_index(self) -> int:
+        """Frequency channel index of the minimum frequency (bit5-0)."""
+        return self.min_freq & 0b111111
 
 
 @dataclass(frozen=True)
