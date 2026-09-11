@@ -73,8 +73,6 @@ class FakeSocket:
         self.closed = False
 
     def recv(self, _size: int) -> bytes:
-        if not self.chunks:
-            return b""
         chunk = self.chunks.pop(0)
         if isinstance(chunk, BaseException):
             raise chunk

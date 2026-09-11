@@ -47,7 +47,7 @@ def test_version_ahead_of_published() -> None:
     try:
         with urllib.request.urlopen(PYPI_JSON, timeout=5) as resp:
             published = json.load(resp)["info"]["version"]
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:  # pragma: no cover
         pytest.skip(f"PyPI unreachable: {exc}")
 
     assert Version(_local_version()) > Version(published), (
