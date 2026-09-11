@@ -68,6 +68,24 @@ class ReaderInfo:
     scan_time: int
 
 
+@dataclass(frozen=True)
+class WorkModeInfo:
+    """Decoded response of Get WorkMode (0x36): Wiegand + work-mode params."""
+
+    wg_mode: int
+    wg_data_interval: int
+    wg_pulse_width: int
+    wg_pulse_interval: int
+    read_mode: int
+    mode_state: int
+    mem_inven: int
+    first_adr: int
+    word_num: int
+    tag_time: int
+    eas_accuracy: int
+    syris_offset: int
+
+
 def parse_response(raw: bytes) -> RfidResponse:
     """Parse one complete command response."""
     return RfidResponse.from_frame(validate_frame(raw))
@@ -192,4 +210,148 @@ class RfidClient:
         response = self._send_command(adr, Command.SET_SCAN_TIME, bytes([scan_time]))
         if not response.ok:
             raise RuntimeError(f"Set scan time failed: {response.status_text}")
+        return response
+
+    def set_region(self, adr: int, max_fre: int, min_fre: int) -> RfidResponse:
+        """Set frequency band (0x22). max_fre/min_fre pack band in bit7-6 and
+        the frequency index in bit5-0; see manual 8.4.2. Raw bytes, 0-255."""
+        for name, val in (("max_fre", max_fre), ("min_fre", min_fre)):
+            if not 0 <= val <= 0xFF:
+                raise ValueError(f"{name} must be 0-255, got {val}")
+        response = self._send_command(
+            adr, Command.SET_REGION, bytes([max_fre, min_fre])
+        )
+        if not response.ok:
+            raise RuntimeError(f"Set region failed: {response.status_text}")
+        return response
+
+    def set_baud_rate(self, adr: int, baud_code: int) -> RfidResponse:
+        """Set serial baud rate (0x28). Codes: 0=9600 1=19200 2=38400
+        5=57600 6=115200. Nonvolatile; response uses the OLD rate, the next
+        command must use the new rate."""
+        if baud_code not in (0, 1, 2, 5, 6):
+            raise ValueError(f"baud_code must be one of 0,1,2,5,6, got {baud_code}")
+        response = self._send_command(adr, Command.SET_BAUD_RATE, bytes([baud_code]))
+        if not response.ok:
+            raise RuntimeError(f"Set baud rate failed: {response.status_text}")
+        return response
+
+    def acousto_optic_control(
+        self, adr: int, active_t: int, silent_t: int, times: int
+    ) -> RfidResponse:
+        """LED/buzzer control (0x33). active_t/silent_t in units of 50ms,
+        times = repeat count. All 0-255."""
+        for name, val in (
+            ("active_t", active_t),
+            ("silent_t", silent_t),
+            ("times", times),
+        ):
+            if not 0 <= val <= 0xFF:
+                raise ValueError(f"{name} must be 0-255, got {val}")
+        response = self._send_command(
+            adr, Command.ACOUSTO_OPTIC_CONTROL, bytes([active_t, silent_t, times])
+        )
+        if not response.ok:
+            raise RuntimeError(f"Acousto-optic control failed: {response.status_text}")
+        return response
+
+    def set_wiegand(
+        self,
+        adr: int,
+        wg_mode: int,
+        data_interval: int,
+        pulse_width: int,
+        pulse_interval: int,
+    ) -> RfidResponse:
+        """Configure Wiegand output (0x34). See manual 8.4.8 for bit meanings.
+        data_interval x10ms, pulse_width x10us, pulse_interval x100us."""
+        for name, val in (
+            ("wg_mode", wg_mode),
+            ("data_interval", data_interval),
+            ("pulse_width", pulse_width),
+            ("pulse_interval", pulse_interval),
+        ):
+            if not 0 <= val <= 0xFF:
+                raise ValueError(f"{name} must be 0-255, got {val}")
+        response = self._send_command(
+            adr,
+            Command.SET_WIEGAND,
+            bytes([wg_mode, data_interval, pulse_width, pulse_interval]),
+        )
+        if not response.ok:
+            raise RuntimeError(f"Set Wiegand failed: {response.status_text}")
+        return response
+
+    def set_work_mode(
+        self,
+        adr: int,
+        read_mode: int,
+        mode_state: int,
+        mem_inven: int,
+        first_adr: int,
+        word_num: int,
+        tag_time: int,
+    ) -> RfidResponse:
+        """Set work mode (0x35). read_mode bit1-0: 0=Answer 1=Scan
+        2=Trigger(Low) 3=Trigger(High). Nonvolatile. WARNING: Scan/Trigger
+        mode makes the reader respond only to reader-defined commands and
+        auto-push tags; see manual 8.4.9."""
+        params = (read_mode, mode_state, mem_inven, first_adr, word_num, tag_time)
+        for name, val in zip(
+            (
+                "read_mode",
+                "mode_state",
+                "mem_inven",
+                "first_adr",
+                "word_num",
+                "tag_time",
+            ),
+            params,
+            strict=True,
+        ):
+            if not 0 <= val <= 0xFF:
+                raise ValueError(f"{name} must be 0-255, got {val}")
+        response = self._send_command(adr, Command.SET_WORK_MODE, bytes(params))
+        if not response.ok:
+            raise RuntimeError(f"Set work mode failed: {response.status_text}")
+        return response
+
+    def get_work_mode(self, adr: int = 0) -> WorkModeInfo:
+        """Read Wiegand + work-mode parameters (0x36)."""
+        response = self._send_command(adr, Command.GET_WORK_MODE)
+        if not response.ok:
+            raise RuntimeError(f"Get work mode failed: {response.status_text}")
+        d = response.data
+        if len(d) < 12:
+            raise ValueError(f"Unexpected work-mode response length: {len(d)} bytes")
+        return WorkModeInfo(*d[:12])
+
+    def set_eas_accuracy(self, adr: int, accuracy: int) -> RfidResponse:
+        """Set EAS alarm accuracy (0x37), range 0-8, default 8."""
+        if not 0 <= accuracy <= 8:
+            raise ValueError(f"accuracy must be 0-8, got {accuracy}")
+        response = self._send_command(adr, Command.SET_EAS_ACCURACY, bytes([accuracy]))
+        if not response.ok:
+            raise RuntimeError(f"Set EAS accuracy failed: {response.status_text}")
+        return response
+
+    def set_syris_response_offset(self, adr: int, offset_ms: int) -> RfidResponse:
+        """Set Syris485 response offset (0x38), (0-100) x1ms, default 0."""
+        if not 0 <= offset_ms <= 100:
+            raise ValueError(f"offset_ms must be 0-100, got {offset_ms}")
+        response = self._send_command(
+            adr, Command.SYRIS_RESPONSE_OFFSET, bytes([offset_ms])
+        )
+        if not response.ok:
+            raise RuntimeError(f"Set Syris offset failed: {response.status_text}")
+        return response
+
+    def set_trigger_offset(self, adr: int, trigger_s: int) -> RfidResponse:
+        """Set trigger offset (0x3B), (0-254) x1s; 255 queries current value.
+        Firmware V2.36+ only."""
+        if not 0 <= trigger_s <= 255:
+            raise ValueError(f"trigger_s must be 0-255, got {trigger_s}")
+        response = self._send_command(adr, Command.TRIGGER_OFFSET, bytes([trigger_s]))
+        if not response.ok:
+            raise RuntimeError(f"Set trigger offset failed: {response.status_text}")
         return response

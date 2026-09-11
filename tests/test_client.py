@@ -12,6 +12,7 @@ from uhfreader18 import (
     ReaderInfo,
     RfidClient,
     Status,
+    WorkModeInfo,
     build_heartbeat,
     build_response_frame,
 )
@@ -118,6 +119,85 @@ def test_set_power_range(power: int) -> None:
 def test_set_scan_time_range(scan_time: int) -> None:
     with pytest.raises(ValueError, match="0-255"):
         RfidClient("192.0.2.1", 2077).set_scan_time(0, scan_time)
+
+
+def _ok(command: int, data: bytes = b"") -> bytes:
+    return build_response_frame(0, command, Status.SUCCESS, data)
+
+
+def test_set_region_sends_two_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SET_REGION)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_region(0, 0x20, 0x00).ok
+    assert sock.sent[0][2:5] == bytes([Command.SET_REGION, 0x20, 0x00])
+
+
+@pytest.mark.parametrize("code", [3, 4, 7, -1])
+def test_set_baud_rate_rejects_bad_code(code: int) -> None:
+    with pytest.raises(ValueError, match="0,1,2,5,6"):
+        RfidClient("192.0.2.1", 2077).set_baud_rate(0, code)
+
+
+def test_set_baud_rate_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SET_BAUD_RATE)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_baud_rate(0, 6).ok
+    assert sock.sent[0][2:4] == bytes([Command.SET_BAUD_RATE, 6])
+
+
+def test_acousto_optic_sends_three_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.ACOUSTO_OPTIC_CONTROL)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.acousto_optic_control(0, 2, 3, 5).ok
+    assert sock.sent[0][2:6] == bytes([Command.ACOUSTO_OPTIC_CONTROL, 2, 3, 5])
+
+
+def test_set_wiegand_sends_four_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SET_WIEGAND)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_wiegand(0, 1, 30, 10, 15).ok
+    assert sock.sent[0][2:7] == bytes([Command.SET_WIEGAND, 1, 30, 10, 15])
+
+
+def test_set_work_mode_sends_six_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SET_WORK_MODE)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_work_mode(0, 0, 2, 1, 0, 4, 0).ok
+    assert sock.sent[0][2:9] == bytes([Command.SET_WORK_MODE, 0, 2, 1, 0, 4, 0])
+
+
+def test_get_work_mode_decodes(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = bytes([1, 30, 10, 15, 0, 2, 1, 0, 4, 0, 8, 5])
+    sock = FakeSocket([_ok(Command.GET_WORK_MODE, payload)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        wm = client.get_work_mode()
+    assert wm == WorkModeInfo(1, 30, 10, 15, 0, 2, 1, 0, 4, 0, 8, 5)
+
+
+@pytest.mark.parametrize("acc", [-1, 9])
+def test_set_eas_accuracy_range(acc: int) -> None:
+    with pytest.raises(ValueError, match="0-8"):
+        RfidClient("192.0.2.1", 2077).set_eas_accuracy(0, acc)
+
+
+@pytest.mark.parametrize("off", [-1, 101])
+def test_set_syris_offset_range(off: int) -> None:
+    with pytest.raises(ValueError, match="0-100"):
+        RfidClient("192.0.2.1", 2077).set_syris_response_offset(0, off)
+
+
+def test_set_trigger_offset_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.TRIGGER_OFFSET)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_trigger_offset(0, 10).ok
+    assert sock.sent[0][2:4] == bytes([Command.TRIGGER_OFFSET, 10])
 
 
 def test_not_connected() -> None:

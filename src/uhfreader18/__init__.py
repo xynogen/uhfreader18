@@ -10,7 +10,13 @@ from .builder import (
     is_heartbeat,
 )
 from .checksum import compute_checksum, crc16
-from .client import ReaderInfo, RfidClient, RfidResponse, parse_response
+from .client import (
+    ReaderInfo,
+    RfidClient,
+    RfidResponse,
+    WorkModeInfo,
+    parse_response,
+)
 from .constants import Command, FrameError, MemBank, Status
 from .frame import Frame, Heartbeat, validate_frame
 from .stream import ParseResult, StreamBuffer
@@ -28,6 +34,7 @@ __all__ = [
     "RfidResponse",
     "Status",
     "StreamBuffer",
+    "WorkModeInfo",
     "build_command_frame",
     "build_heartbeat",
     "build_response_frame",
