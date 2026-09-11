@@ -6,26 +6,73 @@ ruff = "latest"
 [env]
 _.python.venv = { path = ".venv", create = true }
 
+# --- Environment ---
+
 [tasks.install]
-description = "Sync dev environment"
+description = "Sync local dev environment"
 run = "uv pip install -e '.[dev]'"
 
-[tasks.lint]
-description = "Lint + format check"
-run = ["ruff check src tests", "ruff format --check src tests"]
+[tasks.dev]
+description = "Run the receive server CLI (uhfreader18-server)"
+run = "uhfreader18-server"
 
-[tasks.fmt]
-description = "Format code"
-run = "ruff format src tests"
+# --- Quality ---
+
+[tasks.format]
+description = "Format operations — fix rewrites, check is dry-run for CI (fix|check)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+action="${1:-fix}"
+case "$action" in
+  fix)   ruff format src tests && ruff check --fix src tests ;;
+  check) ruff format --check src tests && ruff check src tests ;;
+  *)     echo "Unknown action: $action (use fix|check)"; exit 1 ;;
+esac
+'''
+
+[tasks.lint]
+description = "Lint operations — check reports issues, fix auto-corrects (check|fix)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+action="${1:-check}"
+case "$action" in
+  check) ruff check src tests ;;
+  fix)   ruff check --fix src tests ;;
+  *)     echo "Unknown action: $action (use check|fix)"; exit 1 ;;
+esac
+'''
 
 [tasks.typecheck]
-description = "Type check"
+description = "Static type check (pyright)"
 run = "pyright"
 
 [tasks.test]
-description = "Run tests"
-run = "pytest"
+description = "Test operations (unit|cov|tidy)"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+action="${1:-unit}"
+if [ -z "$action" ]; then
+  echo "Usage: mise run test <action>"
+  echo ""
+  echo "Actions:"
+  echo "  unit  Run pytest"
+  echo "  cov   Run pytest with coverage report"
+  echo "  tidy  Remove caches and build artifacts"
+  exit 0
+fi
+case "$action" in
+  unit) pytest ;;
+  cov)  coverage run -m pytest && coverage report ;;
+  tidy) find . -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+        rm -rf .pytest_cache .coverage dist build ./*.egg-info ;;
+  *)    echo "Unknown action: $action (use unit|cov|tidy)"; exit 1 ;;
+esac
+'''
 
 [tasks.check]
 description = "Full CI gate: lint + typecheck + test"
-depends = ["lint", "typecheck", "test"]
+depends = ["lint", "typecheck"]
+run = "pytest"
