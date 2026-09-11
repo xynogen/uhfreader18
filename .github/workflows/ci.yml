@@ -2,6 +2,11 @@ name: CI
 
 on:
   workflow_call:
+    inputs:
+      full:
+        description: Run the full Python matrix (release verification)
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -9,14 +14,37 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          cache: true
+        env:
+          MISE_PYTHON_DEFAULT_PACKAGES: ""
+      - run: mise run install
+      - run: mise run lint check
+      - run: mise run typecheck
+
   test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        # Fast feedback on push (latest only); exhaustive on release (full=true).
+        python-version: ${{ inputs.full && fromJSON('["3.10", "3.11", "3.12", "3.13"]') || fromJSON('["3.13"]') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -28,7 +56,7 @@ jobs:
           MISE_PYTHON_DEFAULT_PACKAGES: ""
       - run: mise use python@${{ matrix.python-version }}
       - run: mise run install
-      - run: mise run check
+      - run: mise run test unit
 
   package:
     runs-on: ubuntu-latest
