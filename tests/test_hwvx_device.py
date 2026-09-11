@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from ipaddress import IPv4Address
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from uhfreader18.hwvx import DeviceConfig, SearchResult
+from uhfreader18.hwvx import BaudRate, DeviceConfig, SearchResult
 from uhfreader18.hwvx.device import HwVxDevice
+
+DEVICE_IP = IPv4Address("192.168.1.100")
+NEW_IP = IPv4Address("10.0.0.50")
+NEW_MASK = IPv4Address("255.255.0.0")
+NEW_GW = IPv4Address("10.0.0.1")
 
 
 @pytest.fixture()
@@ -17,8 +24,8 @@ def mock_transport() -> MagicMock:
     transport.search.return_value = [
         SearchResult(
             mac_address="AA:BB:CC:DD:EE:FF",
-            port_number="4196",
-            ip_address="192.168.1.100",
+            port_number=4196,
+            ip_address=DEVICE_IP,
         )
     ]
     transport.request.return_value = "OK"
@@ -29,7 +36,7 @@ def mock_transport() -> MagicMock:
 def device(mock_transport: MagicMock) -> HwVxDevice:
     """HwVxDevice with mocked transport."""
     with patch("uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport):
-        dev = HwVxDevice("192.168.1.100")
+        dev = HwVxDevice(DEVICE_IP)
     return dev
 
 
@@ -41,10 +48,10 @@ class TestConnect:
             "uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport
         ) as networking:
             HwVxDevice(
-                "192.168.1.100",
+                DEVICE_IP,
                 mac_address="AA:BB:CC:DD:EE:FF",
                 broadcast=True,
-                broadcast_ip="10.10.0.255",
+                broadcast_ip=IPv4Address("10.10.0.255"),
             )
 
         networking.assert_called_once_with("10.10.0.255")
@@ -56,7 +63,7 @@ class TestConnect:
             "uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport
         ) as networking:
             dev = HwVxDevice(
-                "192.168.1.100",
+                DEVICE_IP,
                 mac_address="AA:BB:CC:DD:EE:FF",
                 broadcast=True,
             )
@@ -66,14 +73,14 @@ class TestConnect:
         networking.assert_called_once_with("255.255.255.255")
         mock_transport.search.assert_not_called()
         mock_transport.request.assert_any_call("WAA:BB:CC:DD:EE:FF", retries=3)
-        assert result.ip_address == "192.168.1.100"
+        assert result.ip_address == DEVICE_IP
 
     def test_sets_mac_from_search(
         self, device: HwVxDevice, mock_transport: MagicMock
     ) -> None:
         result = device.connect()
         assert device.mac == "AA:BB:CC:DD:EE:FF"
-        assert result.ip_address == "192.168.1.100"
+        assert result.ip_address == DEVICE_IP
 
     def test_sends_select_and_login(
         self, device: HwVxDevice, mock_transport: MagicMock
@@ -90,51 +97,76 @@ class TestConnect:
             device.connect()
 
 
+# GET check token -> wire value, as the device would answer.
+_DEVICE_ANSWERS = {
+    "01": "admin",
+    "02": "MyDevice",
+    "03": "AA:BB",
+    "04": "192.168.1.100",
+    "05": "4196",
+    "06": "0",
+    "07": "0",
+    "08": "0",
+    "09": "60",
+    "0A": "0",
+    "0B": "0",
+    "0C": "3",
+    "0D": "0",
+    "0E": "1",
+    "0F": "0",
+    "10": "1024",
+    "11": "0",
+    "12": "192.168.1.1",
+    "13": "5000",
+    "14": "192.168.1.1",
+    "15": "255.255.255.0",
+    "16": "0",
+}
+
+
+def _answer_from(table: dict[str, str]) -> Callable[[str, str], str]:
+    """Build a ``request_single`` side effect that answers by check token."""
+
+    def answer(_cmd: str, check: str) -> str:
+        return table[check]
+
+    return answer
+
+
 class TestGetConfig:
-    def test_reads_all_settings(
+    def test_reads_all_settings_as_typed_values(
         self, device: HwVxDevice, mock_transport: MagicMock
     ) -> None:
-        # Map each check token to a value
-        values = {
-            "01": "admin",
-            "02": "MyDevice",
-            "03": "AA:BB",
-            "04": "192.168.1.100",
-            "05": "4196",
-            "06": "0",
-            "07": "0",
-            "08": "0",
-            "09": "60",
-            "0A": "0",
-            "0B": "0",
-            "0C": "3",
-            "0D": "0",
-            "0E": "1",
-            "0F": "0",
-            "10": "1024",
-            "11": "0",
-            "12": "192.168.1.1",
-            "13": "5000",
-            "14": "192.168.1.1",
-            "15": "255.255.255.0",
-            "16": "0",
-        }
-
-        def fake_request_single(cmd: str, check: str) -> str:
-            return values[check]
-
-        mock_transport.request_single.side_effect = fake_request_single
+        mock_transport.request_single.side_effect = _answer_from(_DEVICE_ANSWERS)
 
         device.connect()
         cfg = device.get_config()
 
         assert cfg.username == "admin"
         assert cfg.device_name == "MyDevice"
-        assert cfg.ip_address == "192.168.1.100"
-        assert cfg.baud_rate == "3"
-        assert cfg.subnet_mask == "255.255.255.0"
-        assert cfg.dhcp == "0"
+        assert cfg.ip_address == DEVICE_IP
+        assert cfg.baud_rate is BaudRate.BAUD_9600
+        assert cfg.subnet_mask == IPv4Address("255.255.255.0")
+        assert cfg.connection_timeout == 60
         assert mock_transport.request_single.call_count == 22
+
+    def test_sends_get_command_with_matching_check(
+        self, device: HwVxDevice, mock_transport: MagicMock
+    ) -> None:
+        mock_transport.request_single.side_effect = _answer_from(_DEVICE_ANSWERS)
+        device.connect()
+        device.get_config()
+        mock_transport.request_single.assert_any_call("GBR", "0C")
+        mock_transport.request_single.assert_any_call("GIP", "04")
+
+    def test_surfaces_unparseable_device_value(
+        self, device: HwVxDevice, mock_transport: MagicMock
+    ) -> None:
+        answers = {**_DEVICE_ANSWERS, "0C": "9"}  # baud index 9 does not exist
+        mock_transport.request_single.side_effect = _answer_from(answers)
+        device.connect()
+        with pytest.raises(ValueError, match="baud_rate: '9'"):
+            device.get_config()
 
 
 class TestSaveConfig:
@@ -145,14 +177,51 @@ class TestSaveConfig:
             "uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport
         ) as networking:
             dev = HwVxDevice(
-                "192.168.1.100",
+                DEVICE_IP,
                 mac_address="AA:BB:CC:DD:EE:FF",
                 broadcast=True,
             )
             dev.save_config(sample_config)
 
         networking.assert_called_once_with("255.255.255.255")
-        assert mock_transport.send.call_count == 22
+        assert mock_transport.send.call_count == 22  # L + 20 settings + E
+
+    def test_serializes_enum_values_not_names(
+        self, mock_transport: MagicMock, sample_config: DeviceConfig
+    ) -> None:
+        sample_config.baud_rate = BaudRate.BAUD_115200
+        with patch(
+            "uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport
+        ):
+            dev = HwVxDevice(DEVICE_IP, mac_address="AA", broadcast=True)
+            dev.save_config(sample_config)
+
+        cmds = [c[0][0] for c in mock_transport.send.call_args_list]
+        assert "SBR7|19" in cmds
+        assert "SIP192.168.1.100|25" in cmds
+        assert not any("BaudRate." in c for c in cmds)
+
+    def test_ip_is_last_setting_written(
+        self, mock_transport: MagicMock, sample_config: DeviceConfig
+    ) -> None:
+        """IP must change last or the unicast channel dies mid-save."""
+        with patch(
+            "uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport
+        ):
+            HwVxDevice(DEVICE_IP, mac_address="AA", broadcast=True).save_config(
+                sample_config
+            )
+        cmds = [c[0][0] for c in mock_transport.send.call_args_list]
+        settings = [c for c in cmds if c.startswith("S")]
+        assert settings[-1].startswith("SIP")
+
+    def test_invalid_config_sends_nothing(
+        self, device: HwVxDevice, mock_transport: MagicMock, sample_config: DeviceConfig
+    ) -> None:
+        sample_config.port_number = 0
+        with pytest.raises(ValueError):
+            device.save_config(sample_config)
+        mock_transport.send.assert_not_called()
 
     def test_sends_login_and_reboot(
         self, device: HwVxDevice, mock_transport: MagicMock, sample_config: DeviceConfig
@@ -180,9 +249,6 @@ class TestChangeNetwork:
         self,
         device: HwVxDevice,
         mock_transport: MagicMock,
-        new_ip: str = "10.0.0.50",
-        mask: str = "255.255.0.0",
-        gw: str = "10.0.0.1",
     ) -> tuple[list[str], MagicMock]:
         """Call change_network and return (unicast_cmds, broadcast_mock)."""
         device.mac = "AA:BB:CC:DD:EE:FF"
@@ -196,7 +262,7 @@ class TestChangeNetwork:
         with patch(
             "uhfreader18.hwvx.device.HwVxNetworking", return_value=broadcast_mock
         ):
-            device.change_network(new_ip, mask, gw)
+            device.change_network(NEW_IP, NEW_MASK, NEW_GW)
 
         unicast_cmds = [c[0][0] for c in mock_transport.send.call_args_list]
         return unicast_cmds, broadcast_mock
@@ -209,21 +275,19 @@ class TestChangeNetwork:
             "uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport
         ) as networking:
             dev = HwVxDevice(
-                "192.168.1.100",
+                DEVICE_IP,
                 mac_address="AA:BB:CC:DD:EE:FF",
                 broadcast=True,
             )
-            dev.change_network("10.0.0.50", "255.255.0.0", "10.0.0.1")
+            dev.change_network(NEW_IP, NEW_MASK, NEW_GW)
 
         networking.assert_called_once_with("255.255.255.255")
         assert mock_transport.send.call_count == 6
 
-    def test_rejects_bad_ip_before_send(
-        self, device: HwVxDevice, mock_transport: MagicMock
-    ) -> None:
-        with pytest.raises(ValueError, match="valid IPv4"):
-            device.change_network("999.1.1.1", "255.255.0.0", "10.0.0.1")
-        mock_transport.send.assert_not_called()
+    def test_bad_ip_cannot_be_constructed(self) -> None:
+        """Taking IPv4Address means invalid input never reaches the device."""
+        with pytest.raises(ValueError):
+            IPv4Address("999.1.1.1")
 
     def test_sends_ip_command(
         self, device: HwVxDevice, mock_transport: MagicMock
@@ -292,7 +356,7 @@ class TestContextManager:
             patch(
                 "uhfreader18.hwvx.device.HwVxNetworking", return_value=mock_transport
             ),
-            HwVxDevice("1.2.3.4") as _dev,
+            HwVxDevice(IPv4Address("1.2.3.4")) as _dev,
         ):
             pass
         mock_transport.close.assert_called_once()

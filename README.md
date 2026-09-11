@@ -83,6 +83,7 @@ with RfidClient("192.168.1.100", 2077) as reader:
     print(f"firmware = {info.version}")
     print(f"model = {info.reader_model}")        # ReaderType | None
     print(f"protocols = {info.protocols!s}")     # Protocol flags
+    print(f"band = {info.band}, ch {info.min_index}-{info.max_index}")
     print(f"power = {info.power} dBm")
 ```
 
@@ -104,19 +105,35 @@ with HwVxNetworking() as net:                    # UDP broadcast
 for the complete matching response and handling TCP fragmentation internally.
 
 ```python
-from uhfreader18 import RfidClient
+from uhfreader18 import (
+    FreqBand, MemInven, ModeState, ReaderBaudRate, RfidClient, WorkMode,
+)
 
 with RfidClient("192.168.1.100", 2077, timeout=3.0) as reader:
     info = reader.get_reader_info(adr=0x00)
     reader.set_address(current_adr=0x00, new_adr=0x01)
     reader.set_power(adr=0x01, power=30)
     reader.set_scan_time(adr=0x01, scan_time=10)
-    reader.set_region(adr=0x01, max_fre=0x2D, min_fre=0x0A)
-    reader.set_baud_rate(adr=0x01, baud_code=6)          # 6 = 115200 bps
+    reader.set_region(adr=0x01, band=FreqBand.US, max_index=45, min_index=10)
+    reader.set_baud_rate(adr=0x01, baud=ReaderBaudRate.BAUD_115200)
+    reader.set_work_mode(
+        adr=0x01,
+        work_mode=WorkMode.SCAN,
+        state=ModeState.RS_OUTPUT | ModeState.BEEP_OFF,
+        mem_inven=MemInven.EPC,
+        first_adr=0, word_num=4, tag_time=0,
+    )
     reader.acousto_optic_control(adr=0x01, active_t=1, silent_t=1, times=3)
     work = reader.get_work_mode(adr=0x01)
     print(work.work_mode, work.wiegand_format, work.state_flags)
 ```
+
+Every protocol option is an enum parameter, not a magic byte: `FreqBand`,
+`ReaderBaudRate`, `WorkMode`, `ModeState`, `MemInven`, `WiegandFormat`. The
+client packs them into wire bytes itself (e.g. band into bit7-6 of the
+frequency byte), and rejects a bare `int` with `TypeError` even from untyped
+callers. Plain `int` parameters are only used for real numbers (power, times,
+addresses) and are range-checked.
 
 All `set_*` / control methods return an `RfidResponse` (`.ok`, `.status_text`).
 `get_reader_info` returns `ReaderInfo`; `get_work_mode` returns `WorkModeInfo`.
@@ -125,14 +142,14 @@ All `set_*` / control methods return an `RfidResponse` (`.ok`, `.status_text`).
 |---|---|---|---|
 | `get_reader_info(adr=0)` | `0x21` | `ReaderInfo` | Address, firmware, protocol, power, frequency, scan time |
 | `discover_address()` | `0x21` | `(ReaderInfo, int)` | Find configured address via broadcast `0xFF` |
-| `set_region(adr, max_fre, min_fre)` | `0x22` | `RfidResponse` | Set frequency band limits |
+| `set_region(adr, band, max_index, min_index)` | `0x22` | `RfidResponse` | `FreqBand` + channel indices 0–63 |
 | `set_address(current_adr, new_adr)` | `0x24` | `RfidResponse` | Change reader address (EEPROM) |
 | `set_scan_time(adr, scan_time)` | `0x25` | `RfidResponse` | Inventory scan time (3–255 × 100 ms) |
-| `set_baud_rate(adr, baud_code)` | `0x28` | `RfidResponse` | Change serial baud rate |
+| `set_baud_rate(adr, baud)` | `0x28` | `RfidResponse` | `ReaderBaudRate` (9600–115200) |
 | `set_power(adr, power)` | `0x2F` | `RfidResponse` | RF output power (0–30) |
 | `acousto_optic_control(adr, active_t, silent_t, times)` | `0x33` | `RfidResponse` | LED / buzzer |
-| `set_wiegand(adr, wg_mode, data_interval, pulse_width, pulse_interval)` | `0x34` | `RfidResponse` | Wiegand output config |
-| `set_work_mode(adr, read_mode, mode_state, ...)` | `0x35` | `RfidResponse` | Scan / trigger / answer mode |
+| `set_wiegand(adr, wg_format, data_interval, pulse_width, pulse_interval)` | `0x34` | `RfidResponse` | `WiegandFormat` flags + timings |
+| `set_work_mode(adr, work_mode, state, mem_inven, first_adr, word_num, tag_time)` | `0x35` | `RfidResponse` | `WorkMode`, `ModeState` flags, `MemInven` |
 | `get_work_mode(adr=0)` | `0x36` | `WorkModeInfo` | Read Wiegand + work-mode params |
 | `set_eas_accuracy(adr, accuracy)` | `0x37` | `RfidResponse` | EAS alarm accuracy (0–8) |
 | `set_syris_response_offset(adr, offset_ms)` | `0x38` | `RfidResponse` | Syris485 response offset |
@@ -204,27 +221,41 @@ the low-level transport (search + request/response); `HwVxDevice` is the
 high-level per-reader API.
 
 ```python
-from uhfreader18.hwvx import HwVxDevice, HwVxNetworking
+from ipaddress import IPv4Address
+
+from uhfreader18.hwvx import BaudRate, HwVxDevice, HwVxNetworking, NetWorkMode
 
 # Discover modules on the LAN.
 with HwVxNetworking() as net:
-    devices = net.search()                      # -> list[SearchResult]
+    for found in net.search():                  # -> list[SearchResult]
+        print(found.ip_address, found.port_number)   # IPv4Address, int
 
 # Read and change a device's configuration.
-with HwVxDevice("192.168.1.100") as dev:
+with HwVxDevice(IPv4Address("192.168.1.100")) as dev:
     dev.connect()                               # search + select + login
-    cfg = dev.get_config()                      # -> DeviceConfig (all settings)
-    cfg.work_mode = "1"                         # NetWorkMode.CLIENT
-    cfg.baud_rate = "7"                         # BaudRate.BAUD_115200
+    cfg = dev.get_config()                      # -> DeviceConfig, typed
+    cfg.work_mode = NetWorkMode.CLIENT
+    cfg.baud_rate = BaudRate.BAUD_115200
+    cfg.remote_ip = IPv4Address("192.168.1.50")
+    cfg.remote_port = 5000
     dev.save_config(cfg)                        # validate + write + reboot
 
-    dev.change_network("192.168.1.50", "255.255.255.0", "192.168.1.1")
+    dev.change_network(
+        IPv4Address("192.168.1.50"),
+        IPv4Address("255.255.255.0"),
+        IPv4Address("192.168.1.1"),
+    )
     dev.set_dhcp(True)
     dev.reboot()
 ```
 
-`save_config` calls `cfg.validate()` first and raises `ValueError` (listing
-every bad field) before anything reaches the device. See
+`DeviceConfig` holds **typed values**: `IPv4Address` for addresses, `int` for
+ports and counters, and the module enums (`NetProtocol`, `NetWorkMode`,
+`BaudRate`, `Parity`, `DataBits`, `Toggle`) for every option. An invalid
+address or an out-of-range option cannot be constructed, so it cannot reach
+the device. The UDP protocol's raw strings are converted exactly once, at
+`DeviceConfig.from_wire` / `to_wire`; `save_config` runs `validate()` first
+and raises `ValueError` (listing every bad field) before anything is sent. See
 [`docs/hwvx_module/HWVX.md`](docs/hwvx_module/HWVX.md) for the full UDP setting
 protocol, setting-code table, and field reference.
 
@@ -238,8 +269,8 @@ protocol, setting-code table, and field reference.
 |---|---|---|
 | `RfidClient` | class | TCP command client (see method table above) |
 | `RfidResponse` | dataclass | `.ok`, `.status_text`, `.to_bytes()` |
-| `ReaderInfo` | dataclass | `.reader_model`, `.protocols`, `.max_band`, `.min_band`, `.max_freq_index`, `.min_freq_index` |
-| `WorkModeInfo` | dataclass | `.work_mode`, `.wiegand_format`, `.state_flags`, `.mem_target` |
+| `ReaderInfo` | dataclass | `.reader_model`, `.protocols`, `.band`, `.max_index`, `.min_index`, `.power`, `.scan_time`; `from_bytes()` |
+| `WorkModeInfo` | dataclass | `.work_mode`, `.wiegand_format`, `.state`, `.mem_inven`; fields match setter signatures |
 | `StreamBuffer` | class | Push-stream reassembly; `feed()` -> `ParseResult` |
 | `ParseResult` | dataclass | `.frames`, `.heartbeats`, `.errors` |
 | `Frame` | dataclass | Parsed frame; `.tag`, `.command_name`, `.status_name`, `.hex_readable()` |
@@ -249,16 +280,18 @@ protocol, setting-code table, and field reference.
 | `crc16`, `compute_checksum` | func | CRC-16 helpers |
 | `validate_frame`, `parse_response` | func | Frame parsers |
 | `hex_readable` | func | Byte / int → readable hex |
-| `Command`, `Status`, `MemBank`, `ReaderType`, `Protocol`, `FreqBand`, `WorkMode`, `WiegandFormat`, `ModeState`, `MemInven` | enum | Reader protocol enums |
+| `Command`, `Status`, `MemBank`, `ReaderType` | enum | Frame/response protocol constants |
+| `Protocol`, `FreqBand`, `ReaderBaudRate` | enum | Reader hardware enums; `FreqBand.frequency_mhz(n)`, `ReaderBaudRate.bps` |
+| `WorkMode`, `WiegandFormat`, `ModeState`, `MemInven` | enum | Work-mode / Wiegand enums |
 
 ### `uhfreader18.hwvx`
 
 | Symbol | Kind | Notes |
 |---|---|---|
 | `HwVxNetworking` | class | UDP transport: `search()`, `search_targets()`, `send()`, `receive()`, `request()`, `request_single()` |
-| `HwVxDevice` | class | `connect()`, `get_config()`, `save_config()`, `change_network()`, `set_dhcp()`, `reboot()` |
-| `SearchResult` | dataclass | `mac_address`, `ip_address`, `port_number`, `username`, `device_name` |
-| `DeviceConfig` | dataclass | All readable/writable settings; `.validate()` |
+| `HwVxDevice` | class | `connect()`, `get_config()`, `save_config()`, `change_network(ip, mask, gw)`, `set_dhcp()`, `reboot()`; takes `IPv4Address` |
+| `SearchResult` | dataclass | `mac_address: str`, `ip_address: IPv4Address \| None`, `port_number: int`, `username`, `device_name` |
+| `DeviceConfig` | dataclass | Typed settings (`IPv4Address`, `int`, enums); `.validate()`, `.to_wire()`, `DeviceConfig.from_wire()` |
 | `NetProtocol`, `NetWorkMode`, `BaudRate`, `Parity`, `DataBits`, `Toggle` | enum | Module setting enums (`BaudRate.bps`, `DataBits.count`) |
 | `SETTINGS`, `UDP_PORT`, `RECV_BUFFER`, `RECV_TIMEOUT` | const | Protocol constants |
 

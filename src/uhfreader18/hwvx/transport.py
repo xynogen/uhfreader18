@@ -5,9 +5,18 @@
 from __future__ import annotations
 
 import socket
+from ipaddress import IPv4Address
 
 from .config import SearchResult
 from .constants import RECV_BUFFER, RECV_TIMEOUT, UDP_PORT
+
+
+def _port_or_zero(text: str) -> int:
+    """Parse a port from a search reply; 0 on firmware quirk (never drop a device)."""
+    try:
+        return int(text)
+    except ValueError:
+        return 0
 
 
 class HwVxNetworking:
@@ -99,12 +108,11 @@ class HwVxNetworking:
             reply = data.decode("ascii")
             if not reply or reply[0] != "A":
                 break
-            result = SearchResult()
+            result = SearchResult(ip_address=IPv4Address(addr[0]))
             parts = reply[1:].split("/")
             if len(parts) >= 2:
                 result.mac_address = parts[0]
-                result.port_number = parts[1]
-            result.ip_address = addr[0]
+                result.port_number = _port_or_zero(parts[1])
             if len(parts) > 5:
                 result.username = parts[4]
                 result.device_name = parts[5]

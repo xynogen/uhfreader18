@@ -9,13 +9,68 @@ then get / set configuration.
 
 from __future__ import annotations
 
-import ipaddress
 import time
 from collections.abc import Callable
+from ipaddress import IPv4Address
 from types import TracebackType
 
 from .config import DeviceConfig, SearchResult
+from .constants import Toggle
 from .transport import HwVxNetworking
+
+# One row per setting: (field, setting code, GET check, SET check).
+# GET order matches C# configButton_Click; SET order matches its save flow.
+_SETTINGS: tuple[tuple[str, str, str, str], ...] = (
+    ("username", "ON", "01", "12"),
+    ("device_name", "DN", "02", "13"),
+    ("mac_address", "FE", "03", ""),  # read-only
+    ("ip_address", "IP", "04", "25"),
+    ("port_number", "PN", "05", "15"),
+    ("protocol", "TP", "06", "14"),
+    ("work_mode", "RM", "07", "16"),
+    ("connection_mode", "CM", "08", "1D"),
+    ("connection_timeout", "CT", "09", "1E"),
+    ("rts", "FC", "0A", "17"),
+    ("dtr_mode", "DT", "0B", "18"),
+    ("baud_rate", "BR", "0C", "19"),
+    ("parity", "PR", "0D", "1A"),
+    ("data_bits", "BB", "0E", "1B"),
+    ("reconnect", "RC", "0F", "1C"),
+    ("max_length", "ML", "10", "1F"),
+    ("max_delay", "MD", "11", "20"),
+    ("remote_ip", "DI", "12", "21"),
+    ("remote_port", "DP", "13", "22"),
+    ("gateway_ip", "GI", "14", "23"),
+    ("subnet_mask", "NM", "15", "24"),
+    ("dhcp", "DH", "16", ""),  # set via set_dhcp(), not the config pass
+)
+
+# The device applies SET commands in this exact order (C# save flow); IP last
+# so the unicast channel stays valid until the final command.
+_SET_ORDER = (
+    "username",
+    "device_name",
+    "protocol",
+    "port_number",
+    "work_mode",
+    "rts",
+    "dtr_mode",
+    "baud_rate",
+    "parity",
+    "data_bits",
+    "reconnect",
+    "connection_mode",
+    "connection_timeout",
+    "max_length",
+    "max_delay",
+    "remote_ip",
+    "remote_port",
+    "gateway_ip",
+    "subnet_mask",
+    "ip_address",
+)
+_BY_FIELD = {row[0]: row for row in _SETTINGS}
+_LAN_BROADCAST = IPv4Address("255.255.255.255")
 
 
 class HwVxDevice:
@@ -24,22 +79,22 @@ class HwVxDevice:
 
     Parameters
     ----------
-    ip_address : str
+    ip_address : IPv4Address
         The current IP address of the target device.
     """
 
     def __init__(
         self,
-        ip_address: str,
+        ip_address: IPv4Address,
         *,
         mac_address: str = "",
         broadcast: bool = False,
-        broadcast_ip: str = "255.255.255.255",
+        broadcast_ip: IPv4Address = _LAN_BROADCAST,
     ) -> None:
         self.ip = ip_address
         self.broadcast = broadcast
         self.broadcast_ip = broadcast_ip
-        self.net = HwVxNetworking(broadcast_ip if broadcast else ip_address)
+        self.net = HwVxNetworking(str(broadcast_ip if broadcast else ip_address))
         self.mac = mac_address
 
     # ── connection ───────────────────────────────────────────────────
@@ -62,32 +117,16 @@ class HwVxDevice:
     # ── read configuration ───────────────────────────────────────────
 
     def get_config(self) -> DeviceConfig:
-        """Read all settings from the device (C# ``configButton_Click``)."""
-        cfg = DeviceConfig()
-        r = self.net.request_single
-        cfg.username = r("GON", "01")
-        cfg.device_name = r("GDN", "02")
-        cfg.mac_address = r("GFE", "03")
-        cfg.ip_address = r("GIP", "04")
-        cfg.port_number = r("GPN", "05")
-        cfg.protocol = r("GTP", "06")
-        cfg.work_mode = r("GRM", "07")
-        cfg.connection_mode = r("GCM", "08")
-        cfg.connection_timeout = r("GCT", "09")
-        cfg.rts = r("GFC", "0A")
-        cfg.dtr_mode = r("GDT", "0B")
-        cfg.baud_rate = r("GBR", "0C")
-        cfg.parity = r("GPR", "0D")
-        cfg.data_bits = r("GBB", "0E")
-        cfg.reconnect = r("GRC", "0F")
-        cfg.max_length = r("GML", "10")
-        cfg.max_delay = r("GMD", "11")
-        cfg.remote_ip = r("GDI", "12")
-        cfg.remote_port = r("GDP", "13")
-        cfg.gateway_ip = r("GGI", "14")
-        cfg.subnet_mask = r("GNM", "15")
-        cfg.dhcp = r("GDH", "16")
-        return cfg
+        """Read all settings from the device (C# ``configButton_Click``).
+
+        Raises ``ValueError`` if the device returns a setting this model
+        cannot represent (unknown enum value, malformed IP, ...).
+        """
+        raw = {
+            name: self.net.request_single(f"G{code}", check)
+            for name, code, check, _ in _SETTINGS
+        }
+        return DeviceConfig.from_wire(raw)
 
     # ── write configuration ──────────────────────────────────────────
 
@@ -103,57 +142,33 @@ class HwVxDevice:
         ValueError
             If *cfg* fails validation; nothing is sent in that case.
         """
-        cfg.validate()  # reject bad config before it reaches the device
+        wire = cfg.to_wire()  # validates; nothing is sent if it raises
         delay = 0.01  # 10 ms between commands, matching C#
 
-        self._send_config_pass(self.net.send, cfg, delay, login=True)
+        self._send_config_pass(self.net.send, wire, delay)
 
         if self.broadcast:
             return
 
         # Broadcast fallback
-        with HwVxNetworking(self.broadcast_ip) as broadcast:
+        with HwVxNetworking(str(self.broadcast_ip)) as broadcast:
             broadcast.send(f"W{self.mac}")
             time.sleep(0.1)
-            self._send_config_pass(broadcast.send, cfg, delay, login=True)
+            self._send_config_pass(broadcast.send, wire, delay)
 
     @staticmethod
     def _send_config_pass(
         send: Callable[[str], None],
-        cfg: DeviceConfig,
+        wire: dict[str, str],
         delay: float,
-        *,
-        login: bool = True,
     ) -> None:
-        """Emit the full set-command sequence through *send*."""
-        if login:
-            send("L")
-            time.sleep(0.05)
+        """Emit login, the full set-command sequence, then reboot via *send*."""
+        send("L")
+        time.sleep(0.05)
 
-        commands = [
-            f"SON{cfg.username}|12",
-            f"SDN{cfg.device_name}|13",
-            f"STP{cfg.protocol}|14",
-            f"SPN{cfg.port_number}|15",
-            f"SRM{cfg.work_mode}|16",
-            f"SFC{cfg.rts}|17",
-            f"SDT{cfg.dtr_mode}|18",
-            f"SBR{cfg.baud_rate}|19",
-            f"SPR{cfg.parity}|1A",
-            f"SBB{cfg.data_bits}|1B",
-            f"SRC{cfg.reconnect}|1C",
-            f"SCM{cfg.connection_mode}|1D",
-            f"SCT{cfg.connection_timeout}|1E",
-            f"SML{cfg.max_length}|1F",
-            f"SMD{cfg.max_delay}|20",
-            f"SDI{cfg.remote_ip}|21",
-            f"SDP{cfg.remote_port}|22",
-            f"SGI{cfg.gateway_ip}|23",
-            f"SNM{cfg.subnet_mask}|24",
-            f"SIP{cfg.ip_address}|25",
-        ]
-        for cmd in commands:
-            send(cmd)
+        for name in _SET_ORDER:
+            _, code, _, check = _BY_FIELD[name]
+            send(f"S{code}{wire[name]}|{check}")
             time.sleep(delay)
 
         send("E")
@@ -161,19 +176,14 @@ class HwVxDevice:
 
     # ── quick operations ─────────────────────────────────────────────
 
-    def change_network(self, new_ip: str, subnet_mask: str, gateway_ip: str) -> None:
-        """Change IP, subnet mask, and gateway, then reboot."""
-        for name, value in (
-            ("new_ip", new_ip),
-            ("subnet_mask", subnet_mask),
-            ("gateway_ip", gateway_ip),
-        ):
-            try:
-                ipaddress.IPv4Address(value)
-            except (ipaddress.AddressValueError, ValueError):
-                raise ValueError(
-                    f"{name}: {value!r} is not a valid IPv4 address"
-                ) from None
+    def change_network(
+        self, new_ip: IPv4Address, subnet_mask: IPv4Address, gateway_ip: IPv4Address
+    ) -> None:
+        """Change IP, subnet mask, and gateway, then reboot.
+
+        Taking ``IPv4Address`` (not ``str``) means an invalid address cannot
+        reach this method: the constructor already rejected it.
+        """
         s = self.net.send
 
         # Unicast
@@ -196,7 +206,7 @@ class HwVxDevice:
             return
 
         # Broadcast fallback
-        with HwVxNetworking(self.broadcast_ip) as broadcast:
+        with HwVxNetworking(str(self.broadcast_ip)) as broadcast:
             broadcast.send(f"W{self.mac}")
             time.sleep(0.1)
             broadcast.send("L")
@@ -212,10 +222,10 @@ class HwVxDevice:
 
     def set_dhcp(self, enabled: bool) -> None:
         """Enable / disable DHCP and reboot."""
-        val = "1" if enabled else "0"
+        val = Toggle.ENABLED if enabled else Toggle.DISABLED
         self.net.send("L")
         time.sleep(0.05)
-        self.net.send(f"SDH{val}|28")
+        self.net.send(f"SDH{val.value}|28")
         time.sleep(0.1)
         self.net.send("E")
 

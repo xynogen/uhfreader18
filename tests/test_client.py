@@ -13,6 +13,7 @@ from uhfreader18 import (
     MemInven,
     ModeState,
     Protocol,
+    ReaderBaudRate,
     ReaderInfo,
     ReaderType,
     RfidClient,
@@ -72,7 +73,18 @@ def test_get_reader_info_reassembles_fragmented_response(
     with RfidClient("192.0.2.1", 2077) as client:
         info = client.get_reader_info()
 
-    assert info == ReaderInfo(0, "2.36", 9, 3, 32, 0, 30, 10)
+    assert info == ReaderInfo(
+        address=0,
+        version="2.36",
+        reader_model=ReaderType.UHFREADER18,
+        protocols=Protocol.ISO18000_6B | Protocol.ISO18000_6C,
+        band=FreqBand.USER,
+        max_index=32,
+        min_index=0,
+        power=30,
+        scan_time=10,
+        raw=INFO_DATA,
+    )
     assert sock.sent[0][1:3] == bytes([0, Command.GET_READER_INFO])
     assert sock.closed
 
@@ -101,8 +113,34 @@ def test_set_address(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_set_address_rejects_broadcast_value() -> None:
-    with pytest.raises(ValueError, match="0x00-0xFE"):
+    with pytest.raises(ValueError, match="0-254"):
         RfidClient("192.0.2.1", 2077).set_address(0, 0xFF)
+
+
+@pytest.mark.parametrize("bad", [True, 3.0, "30", None])
+def test_numeric_params_reject_non_int(bad: object) -> None:
+    """bool/float/str where an int byte is due is a bug, not a coercion."""
+    with pytest.raises(TypeError, match="power must be int"):
+        RfidClient("192.0.2.1", 2077).set_power(0, bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("adr", [-1, 256])
+def test_send_rejects_bad_address_before_wire(
+    monkeypatch: pytest.MonkeyPatch, adr: int
+) -> None:
+    sock = FakeSocket([])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client, pytest.raises(ValueError):
+        client.get_reader_info(adr)
+    assert sock.sent == []
+
+
+def test_send_rejects_bare_int_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client, pytest.raises(TypeError):
+        client._send_command(0, 0x21)  # type: ignore[arg-type]
+    assert sock.sent == []
 
 
 @pytest.mark.parametrize("power", [-1, 31])
@@ -111,9 +149,10 @@ def test_set_power_range(power: int) -> None:
         RfidClient("192.0.2.1", 2077).set_power(0, power)
 
 
-@pytest.mark.parametrize("scan_time", [-1, 256])
+@pytest.mark.parametrize("scan_time", [2, 256])
 def test_set_scan_time_range(scan_time: int) -> None:
-    with pytest.raises(ValueError, match="0-255"):
+    """Manual 8.4.4: 0-2 are silently clamped by firmware; refuse them."""
+    with pytest.raises(ValueError, match="3-255"):
         RfidClient("192.0.2.1", 2077).set_scan_time(0, scan_time)
 
 
@@ -121,26 +160,80 @@ def _ok(command: int, data: bytes = b"") -> bytes:
     return build_response_frame(0, command, Status.SUCCESS, data)
 
 
-def test_set_region_sends_two_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_set_region_packs_band_and_index(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = FakeSocket([_ok(Command.SET_REGION)])
     patch_connection(monkeypatch, sock)
     with RfidClient("192.0.2.1", 2077) as client:
-        assert client.set_region(0, 0x20, 0x00).ok
-    assert sock.sent[0][2:5] == bytes([Command.SET_REGION, 0x20, 0x00])
+        assert client.set_region(0, FreqBand.US, max_index=6, min_index=1).ok
+    # Manual 8.4.2: US band = MaxFre bit7-6 == 00, MinFre bit7-6 == 10.
+    assert sock.sent[0][2:5] == bytes([Command.SET_REGION, 0x06, 0x81])
 
 
-@pytest.mark.parametrize("code", [3, 4, 7, -1])
-def test_set_baud_rate_rejects_bad_code(code: int) -> None:
-    with pytest.raises(ValueError, match="0,1,2,5,6"):
-        RfidClient("192.0.2.1", 2077).set_baud_rate(0, code)
+@pytest.mark.parametrize(
+    ("band", "max_index", "min_index", "needle"),
+    [
+        (FreqBand.US, 50, 0, "0-49"),  # US has 50 channels
+        (FreqBand.CHINESE_2, 20, 0, "0-19"),
+        (FreqBand.USER, 0, -1, "0-62"),
+        (FreqBand.US, 3, 5, "exceeds"),
+    ],
+)
+def test_set_region_rejects_bad_indices(
+    band: FreqBand, max_index: int, min_index: int, needle: str
+) -> None:
+    with pytest.raises(ValueError, match=needle):
+        RfidClient("192.0.2.1", 2077).set_region(0, band, max_index, min_index)
+
+
+class TestFreqBand:
+    def test_pack_unpack_round_trip(self) -> None:
+        for band in FreqBand:
+            packed = band.pack(band.max_index, 0)
+            assert FreqBand.unpack(*packed) == (band, band.max_index, 0)
+
+    def test_unpack_rfu_code_is_none(self) -> None:
+        # MaxFre bit6 set -> band code 0b0100, RFU in the manual's table
+        assert FreqBand.unpack(0x40, 0x00) == (None, 0, 0)
+
+    def test_frequency_formula(self) -> None:
+        assert FreqBand.US.frequency_mhz(0) == 902.75
+        assert FreqBand.US.frequency_mhz(49) == 927.25
+        assert FreqBand.CHINESE_2.frequency_mhz(19) == 924.875
+        with pytest.raises(ValueError, match="0-49"):
+            FreqBand.US.frequency_mhz(50)
 
 
 def test_set_baud_rate_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = FakeSocket([_ok(Command.SET_BAUD_RATE)])
     patch_connection(monkeypatch, sock)
     with RfidClient("192.0.2.1", 2077) as client:
-        assert client.set_baud_rate(0, 6).ok
+        assert client.set_baud_rate(0, ReaderBaudRate.BAUD_115200).ok
     assert sock.sent[0][2:4] == bytes([Command.SET_BAUD_RATE, 6])
+
+
+def test_reader_baud_rate_enum() -> None:
+    assert ReaderBaudRate.BAUD_115200.bps == 115200
+    assert ReaderBaudRate(0).bps == 9600
+    assert str(ReaderBaudRate.BAUD_9600) == "ReaderBaudRate.BAUD_9600"
+    with pytest.raises(ValueError):
+        ReaderBaudRate(3)  # unassigned by firmware
+
+
+# Annotations are not enforced at runtime; a bare int must still be refused.
+_BARE_INT_CALLS: list[Callable[[RfidClient], object]] = [
+    lambda c: c.set_baud_rate(0, 6),  # type: ignore[arg-type]
+    lambda c: c.set_region(0, 2, 6, 1),  # type: ignore[arg-type]
+    lambda c: c.set_wiegand(0, 1, 30, 10, 15),  # type: ignore[arg-type]
+    lambda c: c.set_work_mode(0, 0, ModeState(0), MemInven.EPC, 0, 4, 0),  # type: ignore[arg-type]
+    lambda c: c.set_work_mode(0, WorkMode.SCAN, 2, MemInven.EPC, 0, 4, 0),  # type: ignore[arg-type]
+    lambda c: c.set_work_mode(0, WorkMode.SCAN, ModeState(0), 1, 0, 4, 0),  # type: ignore[arg-type]
+]
+
+
+@pytest.mark.parametrize("call", _BARE_INT_CALLS)
+def test_enum_params_reject_bare_int(call: Callable[[RfidClient], object]) -> None:
+    with pytest.raises(TypeError, match="must be"):
+        call(RfidClient("192.0.2.1", 2077))
 
 
 def test_acousto_optic_sends_three_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,7 +248,7 @@ def test_set_wiegand_sends_four_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = FakeSocket([_ok(Command.SET_WIEGAND)])
     patch_connection(monkeypatch, sock)
     with RfidClient("192.0.2.1", 2077) as client:
-        assert client.set_wiegand(0, 1, 30, 10, 15).ok
+        assert client.set_wiegand(0, WiegandFormat.FORMAT_34BIT, 30, 10, 15).ok
     assert sock.sent[0][2:7] == bytes([Command.SET_WIEGAND, 1, 30, 10, 15])
 
 
@@ -163,7 +256,9 @@ def test_set_work_mode_sends_six_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     sock = FakeSocket([_ok(Command.SET_WORK_MODE)])
     patch_connection(monkeypatch, sock)
     with RfidClient("192.0.2.1", 2077) as client:
-        assert client.set_work_mode(0, 0, 2, 1, 0, 4, 0).ok
+        assert client.set_work_mode(
+            0, WorkMode.ANSWER, ModeState.RS_OUTPUT, MemInven.EPC, 0, 4, 0
+        ).ok
     assert sock.sent[0][2:9] == bytes([Command.SET_WORK_MODE, 0, 2, 1, 0, 4, 0])
 
 
@@ -173,7 +268,66 @@ def test_get_work_mode_decodes(monkeypatch: pytest.MonkeyPatch) -> None:
     patch_connection(monkeypatch, sock)
     with RfidClient("192.0.2.1", 2077) as client:
         wm = client.get_work_mode()
-    assert wm == WorkModeInfo(1, 30, 10, 15, 0, 2, 1, 0, 4, 0, 8, 5)
+    assert wm == WorkModeInfo(
+        wiegand_format=WiegandFormat.FORMAT_34BIT,
+        wg_data_interval=30,
+        wg_pulse_width=10,
+        wg_pulse_interval=15,
+        work_mode=WorkMode.ANSWER,
+        state=ModeState.RS_OUTPUT,
+        mem_inven=MemInven.EPC,
+        first_adr=0,
+        word_num=4,
+        tag_time=0,
+        eas_accuracy=8,
+        syris_offset=5,
+        raw=payload,
+    )
+
+
+def test_work_mode_round_trips_into_setter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """What get_work_mode returns must be accepted by set_work_mode as-is."""
+    payload = bytes([1, 30, 10, 15, 1, 2, 1, 0, 4, 0, 8, 5])
+    sock = FakeSocket([_ok(Command.GET_WORK_MODE, payload), _ok(Command.SET_WORK_MODE)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        wm = client.get_work_mode()
+        assert wm.mem_inven is not None
+        client.set_work_mode(
+            0,
+            wm.work_mode,
+            wm.state,
+            wm.mem_inven,
+            wm.first_adr,
+            wm.word_num,
+            wm.tag_time,
+        )
+    assert sock.sent[1][3:9] == payload[4:10]
+
+
+@pytest.mark.parametrize(
+    ("state", "word_num", "needle"),
+    [
+        (ModeState.RS_OUTPUT, 0, "1-32"),
+        (ModeState.RS_OUTPUT, 33, "1-32"),
+        (ModeState.RS_OUTPUT | ModeState.SYRIS_485, 5, "1-4"),
+    ],
+)
+def test_set_work_mode_word_num_depends_on_mode(
+    state: ModeState, word_num: int, needle: str
+) -> None:
+    with pytest.raises(ValueError, match=f"word_num must be {needle}"):
+        RfidClient("192.0.2.1", 2077).set_work_mode(
+            0, WorkMode.SCAN, state, MemInven.EPC, 0, word_num, 0
+        )
+
+
+@pytest.mark.parametrize("field", ["pulse_width", "pulse_interval"])
+def test_set_wiegand_pulse_min_is_one(field: str) -> None:
+    kwargs = {"data_interval": 30, "pulse_width": 10, "pulse_interval": 15}
+    kwargs[field] = 0
+    with pytest.raises(ValueError, match=f"{field} must be 1-255"):
+        RfidClient("192.0.2.1", 2077).set_wiegand(0, WiegandFormat(0), **kwargs)
 
 
 @pytest.mark.parametrize("acc", [-1, 9])
@@ -201,11 +355,19 @@ _SETTER_CALLS: list[tuple[int, Callable[[RfidClient], object]]] = [
     (Command.SET_ADDRESS, lambda c: c.set_address(0, 1)),
     (Command.SET_POWER, lambda c: c.set_power(0, 10)),
     (Command.SET_SCAN_TIME, lambda c: c.set_scan_time(0, 10)),
-    (Command.SET_REGION, lambda c: c.set_region(0, 0x20, 0)),
-    (Command.SET_BAUD_RATE, lambda c: c.set_baud_rate(0, 6)),
+    (Command.SET_REGION, lambda c: c.set_region(0, FreqBand.US, 6, 1)),
+    (Command.SET_BAUD_RATE, lambda c: c.set_baud_rate(0, ReaderBaudRate.BAUD_9600)),
     (Command.ACOUSTO_OPTIC_CONTROL, lambda c: c.acousto_optic_control(0, 1, 1, 1)),
-    (Command.SET_WIEGAND, lambda c: c.set_wiegand(0, 1, 30, 10, 15)),
-    (Command.SET_WORK_MODE, lambda c: c.set_work_mode(0, 0, 2, 1, 0, 4, 0)),
+    (
+        Command.SET_WIEGAND,
+        lambda c: c.set_wiegand(0, WiegandFormat.FORMAT_34BIT, 30, 10, 15),
+    ),
+    (
+        Command.SET_WORK_MODE,
+        lambda c: c.set_work_mode(
+            0, WorkMode.ANSWER, ModeState.RS_OUTPUT, MemInven.EPC, 0, 4, 0
+        ),
+    ),
     (Command.GET_WORK_MODE, lambda c: c.get_work_mode()),
     (Command.SET_EAS_ACCURACY, lambda c: c.set_eas_accuracy(0, 8)),
     (Command.SYRIS_RESPONSE_OFFSET, lambda c: c.set_syris_response_offset(0, 10)),
@@ -245,10 +407,11 @@ def test_set_scan_time_success_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # Out-of-range rejection for the multi-byte wrappers (byte-range guards).
 _RANGE_REJECTS: list[Callable[[RfidClient], object]] = [
-    lambda c: c.set_region(0, 256, 0),
     lambda c: c.acousto_optic_control(0, 256, 0, 0),
-    lambda c: c.set_wiegand(0, 256, 0, 0, 0),
-    lambda c: c.set_work_mode(0, 256, 0, 0, 0, 0, 0),
+    lambda c: c.set_wiegand(0, WiegandFormat(0), 256, 0, 0),
+    lambda c: c.set_work_mode(
+        0, WorkMode.ANSWER, ModeState(0), MemInven.EPC, 256, 0, 0
+    ),
     lambda c: c.set_trigger_offset(0, 256),
 ]
 
@@ -393,50 +556,80 @@ def test_rejects_mismatched_command(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestReaderInfoDecoding:
+    """Lenient on receive: unknown firmware codes become None, never raise."""
+
+    @staticmethod
+    def _info(
+        reader_type: int = 0x09,
+        protocol: int = 0x03,
+        max_fre: int = 0x20,
+        min_fre: int = 0x00,
+    ) -> ReaderInfo:
+        return ReaderInfo.from_bytes(
+            0, bytes([2, 36, reader_type, protocol, max_fre, min_fre, 30, 10])
+        )
+
     def test_reader_model_known(self) -> None:
-        info = ReaderInfo(0, "2.36", 0x09, 0x03, 0x20, 0x00, 30, 10)
-        assert info.reader_model is ReaderType.UHFREADER18
+        assert self._info().reader_model is ReaderType.UHFREADER18
 
     def test_reader_model_unknown_is_none(self) -> None:
-        info = ReaderInfo(0, "2.36", 0xAB, 0x03, 0x20, 0x00, 30, 10)
+        info = self._info(reader_type=0xAB)
         assert info.reader_model is None
+        assert info.raw[2] == 0xAB  # still inspectable
 
     def test_protocols_both(self) -> None:
-        info = ReaderInfo(0, "2.36", 0x09, 0x03, 0x20, 0x00, 30, 10)
-        assert info.protocols is Protocol.ISO18000_6B | Protocol.ISO18000_6C
-        assert Protocol.ISO18000_6C in info.protocols
+        p = self._info(protocol=0x03).protocols
+        assert p is Protocol.ISO18000_6B | Protocol.ISO18000_6C
+        assert Protocol.ISO18000_6C in p
 
     def test_protocols_6c_only(self) -> None:
-        info = ReaderInfo(0, "2.36", 0x09, 0x02, 0x20, 0x00, 30, 10)
-        assert info.protocols is Protocol.ISO18000_6C
-        assert Protocol.ISO18000_6B not in info.protocols
+        p = self._info(protocol=0x02).protocols
+        assert p is Protocol.ISO18000_6C
+        assert Protocol.ISO18000_6B not in p
 
     def test_freq_band_and_index(self) -> None:
-        # max_freq 0x82 = band bit7-6 = 0b10 (US), index bit5-0 = 2
-        info = ReaderInfo(0, "2.36", 0x09, 0x03, 0x82, 0x40, 30, 10)
-        assert info.max_band is FreqBand.US
-        assert info.max_freq_index == 2
-        assert info.min_band is FreqBand.CHINESE_2
-        assert info.min_freq_index == 0
+        # US band: MaxFre bit7-6 = 00, MinFre bit7-6 = 10; indices 2 and 0
+        info = self._info(max_fre=0x02, min_fre=0x80)
+        assert info.band is FreqBand.US
+        assert info.max_index == 2
+        assert info.min_index == 0
+
+    def test_rfu_band_is_none(self) -> None:
+        assert self._info(max_fre=0x42, min_fre=0x00).band is None
+
+    def test_short_scan_time_defaults_to_zero(self) -> None:
+        info = ReaderInfo.from_bytes(0, bytes([2, 36, 9, 3, 0x20, 0, 30]))
+        assert info.scan_time == 0
+
+    def test_too_short_raises(self) -> None:
+        with pytest.raises(ValueError, match="length"):
+            ReaderInfo.from_bytes(0, bytes(6))
+
+    def test_raw_excluded_from_equality(self) -> None:
+        a = self._info()
+        b = ReaderInfo.from_bytes(0, a.raw + b"\xff")  # trailing junk byte
+        assert a == b
 
 
 class TestWorkModeDecoding:
+    @staticmethod
     def _wm(
-        self,
         *,
         read_mode: int = 0,
         wg_mode: int = 0,
         mode_state: int = 0,
         mem_inven: int = 0,
     ) -> WorkModeInfo:
-        return WorkModeInfo(
-            wg_mode, 0, 0, 0, read_mode, mode_state, mem_inven, 0, 0, 0, 0, 0
+        return WorkModeInfo.from_bytes(
+            bytes([wg_mode, 0, 0, 0, read_mode, mode_state, mem_inven, 0, 0, 0, 0, 0])
         )
 
     def test_work_mode(self) -> None:
         assert self._wm(read_mode=0).work_mode is WorkMode.ANSWER
         assert self._wm(read_mode=1).work_mode is WorkMode.SCAN
         assert self._wm(read_mode=0b11).work_mode is WorkMode.TRIGGER_HIGH
+        # RFU bits 2-7 are masked, not an error
+        assert self._wm(read_mode=0b1111_1101).work_mode is WorkMode.SCAN
 
     def test_wiegand_format(self) -> None:
         assert self._wm(wg_mode=0).wiegand_format == WiegandFormat(0)
@@ -445,13 +638,17 @@ class TestWorkModeDecoding:
         assert WiegandFormat.LOW_BIT_FIRST in wf
 
     def test_state_flags(self) -> None:
-        sf = self._wm(mode_state=0b1_0110).state_flags
+        sf = self._wm(mode_state=0b1_0110).state
         assert ModeState.RS_OUTPUT in sf
         assert ModeState.BEEP_OFF in sf
         assert ModeState.SYRIS_485 in sf
         assert ModeState.PROTOCOL_6B not in sf
 
-    def test_mem_target(self) -> None:
-        assert self._wm(mem_inven=0x01).mem_target is MemInven.EPC
-        assert self._wm(mem_inven=0x06).mem_target is MemInven.EAS_ALARM
-        assert self._wm(mem_inven=0x09).mem_target is None
+    def test_mem_inven(self) -> None:
+        assert self._wm(mem_inven=0x01).mem_inven is MemInven.EPC
+        assert self._wm(mem_inven=0x06).mem_inven is MemInven.EAS_ALARM
+        assert self._wm(mem_inven=0x09).mem_inven is None
+
+    def test_too_short_raises(self) -> None:
+        with pytest.raises(ValueError, match="length"):
+            WorkModeInfo.from_bytes(bytes(11))

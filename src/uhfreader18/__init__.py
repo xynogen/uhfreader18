@@ -7,7 +7,7 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("uhfreader18")
 except PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.4.0"
+    __version__ = "0.5.0"
 
 from .builder import (
     build_command_frame,
@@ -31,6 +31,7 @@ from .constants import (
     MemInven,
     ModeState,
     Protocol,
+    ReaderBaudRate,
     ReaderType,
     Status,
     WiegandFormat,
@@ -51,6 +52,7 @@ __all__ = [
     "ModeState",
     "ParseResult",
     "Protocol",
+    "ReaderBaudRate",
     "ReaderInfo",
     "ReaderType",
     "RfidClient",

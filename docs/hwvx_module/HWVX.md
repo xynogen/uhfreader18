@@ -35,21 +35,27 @@ request (`request_single`).
 ## Quick Start
 
 ```python
-from uhfreader18.hwvx import HwVxDevice, HwVxNetworking
+from ipaddress import IPv4Address
+
+from uhfreader18.hwvx import HwVxDevice, HwVxNetworking, NetWorkMode
 
 # Discover every module on the LAN.
 with HwVxNetworking() as net:
     for r in net.search():
-        print(r.ip_address, r.mac_address, r.device_name)
+        print(r.ip_address, r.mac_address, r.device_name)   # IPv4Address, str, str
 
 # Read and change a device's configuration.
-with HwVxDevice("192.168.1.100") as dev:
+with HwVxDevice(IPv4Address("192.168.1.100")) as dev:
     dev.connect()
-    cfg = dev.get_config()
-    cfg.remote_ip = "192.168.1.50"
-    cfg.work_mode = "1"          # NetWorkMode.CLIENT
-    dev.save_config(cfg)         # writes all settings, then reboots
+    cfg = dev.get_config()                    # typed: IPv4Address / int / enums
+    cfg.remote_ip = IPv4Address("192.168.1.50")
+    cfg.work_mode = NetWorkMode.CLIENT
+    dev.save_config(cfg)                      # validate, write all, reboot
 ```
+
+Every value is a real type, never a protocol string: an `IPv4Address` cannot
+be malformed, a `NetWorkMode` cannot be out of range. The wire strings only
+exist inside `DeviceConfig.from_wire` / `to_wire`.
 
 ## `HwVxNetworking`
 
@@ -75,11 +81,11 @@ High-level flows built on `HwVxNetworking`. Context-manager capable.
 
 ```python
 HwVxDevice(
-    ip_address: str,
+    ip_address: IPv4Address,
     *,
     mac_address: str = "",
     broadcast: bool = False,
-    broadcast_ip: str = "255.255.255.255",
+    broadcast_ip: IPv4Address = IPv4Address("255.255.255.255"),
 )
 ```
 
@@ -89,9 +95,9 @@ the broadcast address (useful when the module IP is about to change).
 | Method | Description |
 |---|---|
 | `connect() -> SearchResult` | Search, select (`W{mac}`), and login (`L`). Raises `ConnectionError` if no module answers. |
-| `get_config() -> DeviceConfig` | Read all settings (one `G{code}` per field). |
-| `save_config(cfg)` | Write every setting, then reboot. Retries via broadcast if the IP changes mid-save. |
-| `change_network(new_ip, subnet_mask, gateway_ip)` | Change IP/mask/gateway and reboot. |
+| `get_config() -> DeviceConfig` | Read all settings (one `G{code}` per field) and parse them into typed values. Raises `ValueError` naming every field the firmware returned in a form the model cannot represent. |
+| `save_config(cfg)` | `cfg.to_wire()` (validates first; nothing is sent on failure), write every setting, then reboot. Retries via broadcast if the IP changes mid-save. |
+| `change_network(new_ip: IPv4Address, subnet_mask: IPv4Address, gateway_ip: IPv4Address)` | Change IP/mask/gateway and reboot. |
 | `set_dhcp(enabled)` | Enable or disable DHCP and reboot. |
 | `reboot()` | Send the reboot command (`E`). |
 | `close()` | Close the underlying transport. |
@@ -104,29 +110,42 @@ the broadcast address (useful when the module IP is about to change).
 @dataclass
 class SearchResult:
     mac_address: str = ""
-    port_number: str = ""
-    ip_address: str = ""
+    port_number: int = 0
+    ip_address: IPv4Address | None = None   # None only for the empty default
     username: str = ""
     device_name: str = ""
 ```
 
 ### `DeviceConfig`
 
-All 22 read/writeable settings, each stored as a string. Numeric fields hold
-an enum value as a string (e.g. `protocol="1"` → `NetProtocol.TCP`); use the
-enums below to interpret or build them. `DeviceConfig.validate()` returns a
-list of human-readable errors (empty when valid).
+All 22 read/writeable settings, each with the narrowest type that fits.
 
-| Group | Fields |
+| Group | Field | Type |
+|---|---|---|
+| Network | `username`, `device_name`, `mac_address` | `str` |
+| | `ip_address`, `remote_ip`, `gateway_ip`, `subnet_mask` | `IPv4Address` |
+| | `port_number`, `remote_port` | `int` (1–65535) |
+| | `protocol` | `NetProtocol` |
+| | `work_mode` | `NetWorkMode` |
+| | `dhcp` | `Toggle` |
+| Serial | `baud_rate` | `BaudRate` |
+| | `parity` | `Parity` |
+| | `data_bits` | `DataBits` |
+| | `dtr_mode`, `rts` | `Toggle` |
+| Advanced | `connection_mode` | `Toggle` |
+| | `connection_timeout`, `reconnect`, `max_length`, `max_delay` | `int` (≥ 0) |
+
+| Method | Description |
 |---|---|
-| Network | `username`, `device_name`, `mac_address`, `ip_address`, `port_number`, `protocol`, `work_mode`, `remote_ip`, `remote_port`, `gateway_ip`, `subnet_mask`, `dhcp` |
-| Serial | `baud_rate`, `parity`, `data_bits`, `dtr_mode`, `rts` |
-| Advanced | `connection_mode`, `connection_timeout`, `reconnect`, `max_length`, `max_delay` |
+| `DeviceConfig.from_wire(raw: dict[str, str]) -> DeviceConfig` | Parse the strings the device returns. Raises `ValueError` listing every unparseable field. |
+| `to_wire() -> dict[str, str]` | Validate, then serialize to the strings the device expects. Enums become their `.value`, never their name. |
+| `validate()` | Range checks (ports, counters) and framing rules (`\|`, non-ASCII) for free-text fields. Also rejects a field that was assigned the wrong Python type, since annotations are not enforced at runtime. Raises `ValueError` listing every problem. |
 
 ## Enums
 
-`str()` on any member returns its name; `int()` / `.value` returns the wire
-value used in `DeviceConfig`.
+`str()` on any member returns its name; `.value` is the wire value. You never
+need `.value` yourself: assign the member to a `DeviceConfig` field and
+`to_wire` handles it.
 
 | Enum | Members | Notes |
 |---|---|---|

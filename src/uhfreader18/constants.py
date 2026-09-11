@@ -137,14 +137,61 @@ class Protocol(enum.IntFlag):
 
 
 class FreqBand(enum.IntEnum):
-    """Frequency band, encoded in bit7-bit6 of the max/min frequency bytes."""
+    """Frequency band (manual 8.4.2).
+
+    On the wire the band is a 4-bit value split across two bytes: bit3-2 live
+    in MaxFre bit7-6, bit1-0 in MinFre bit7-6. Use :meth:`pack` /
+    :meth:`unpack`; never assemble those bytes by hand.
+    """
 
     USER = 0b00
     CHINESE_2 = 0b01
     US = 0b10
     KOREAN = 0b11
 
+    @property
+    def max_index(self) -> int:
+        """Highest valid channel index N for this band (manual 8.4.2)."""
+        return _BAND_MAX_INDEX[self]
+
+    def frequency_mhz(self, index: int) -> float:
+        """Centre frequency of channel *index* in MHz."""
+        if not 0 <= index <= self.max_index:
+            raise ValueError(f"{self.name} index must be 0-{self.max_index}")
+        base, step = _BAND_FORMULA[self]
+        return round(base + index * step, 3)
+
+    def pack(self, max_index: int, min_index: int) -> bytes:
+        """Encode (MaxFre, MinFre) bytes for Set Region / Get Reader Info."""
+        hi, lo = self >> 2, self & 0b11
+        return bytes([hi << 6 | max_index, lo << 6 | min_index])
+
+    @classmethod
+    def unpack(cls, max_fre: int, min_fre: int) -> tuple[FreqBand | None, int, int]:
+        """Decode (band, max_index, min_index); band is None for RFU codes."""
+        code = (max_fre >> 6) << 2 | (min_fre >> 6)
+        try:
+            band = cls(code)
+        except ValueError:
+            band = None
+        return band, max_fre & 0b111111, min_fre & 0b111111
+
     __str__ = enum.Enum.__str__
+
+
+_BAND_MAX_INDEX = {
+    FreqBand.USER: 62,
+    FreqBand.CHINESE_2: 19,
+    FreqBand.US: 49,
+    FreqBand.KOREAN: 31,
+}
+# (base MHz, step MHz): Fs = base + N * step
+_BAND_FORMULA = {
+    FreqBand.USER: (902.6, 0.4),
+    FreqBand.CHINESE_2: (920.125, 0.25),
+    FreqBand.US: (902.75, 0.5),
+    FreqBand.KOREAN: (917.1, 0.2),
+}
 
 
 class WorkMode(enum.IntEnum):
@@ -188,6 +235,36 @@ class ModeState(enum.IntFlag):
     SYRIS_485 = 0b1_0000  # bit4: set = Syris 485 (only when RS_OUTPUT set)
 
     __str__ = enum.Enum.__str__
+
+
+class ReaderBaudRate(enum.IntEnum):
+    """Serial baud rate of the reader (Set Baud Rate 0x28).
+
+    Codes 3 and 4 are unassigned by the firmware. Distinct from
+    ``hwvx.BaudRate``, which configures the TCP/IP module's own UART.
+    """
+
+    BAUD_9600 = 0
+    BAUD_19200 = 1
+    BAUD_38400 = 2
+    BAUD_57600 = 5
+    BAUD_115200 = 6
+
+    @property
+    def bps(self) -> int:
+        """The baud rate as bits per second."""
+        return _READER_BPS[self]
+
+    __str__ = enum.Enum.__str__
+
+
+_READER_BPS = {
+    ReaderBaudRate.BAUD_9600: 9600,
+    ReaderBaudRate.BAUD_19200: 19200,
+    ReaderBaudRate.BAUD_38400: 38400,
+    ReaderBaudRate.BAUD_57600: 57600,
+    ReaderBaudRate.BAUD_115200: 115200,
+}
 
 
 class MemInven(enum.IntEnum):

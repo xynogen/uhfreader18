@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.5.0
+
+**Breaking:** strongly-typed models with input validation everywhere.
+
+### Reader (`RfidClient`)
+
+- **Enum parameters replace magic bytes**: `set_baud_rate(baud: ReaderBaudRate)`,
+  `set_region(band: FreqBand, max_index, min_index)`,
+  `set_wiegand(wg_format: WiegandFormat, ...)`,
+  `set_work_mode(work_mode: WorkMode, state: ModeState, mem_inven: MemInven, ...)`.
+  A bare `int` where an enum is expected raises `TypeError` at runtime.
+- New `ReaderBaudRate` enum (`BAUD_9600=0 … BAUD_115200=6`, `.bps`).
+- `FreqBand` gains `.max_index`, `.frequency_mhz(n)`, `.pack()` / `.unpack()`.
+  `set_region` packs the band into bit7-6 itself and validates the index
+  against the band's actual channel count.
+- `ReaderInfo` / `WorkModeInfo` are now decoded at construction
+  (`from_bytes()`); fields are typed (`ReaderType | None`, `Protocol`,
+  `FreqBand | None`, `WorkMode`, `ModeState`, `MemInven | None`, …).
+  Unknown firmware codes → `None`, not an exception (Postel's law).
+  Old int properties (`.max_band`, `.state_flags`, `.mem_target`, etc.) removed;
+  use the typed fields directly. `raw` byte payload kept for debugging.
+- **Input validation at every boundary**: `_require_range` rejects `bool`,
+  `float`, `str` where `int` is expected. `scan_time` enforced 3–255 (manual
+  8.4.4). `pulse_width` / `pulse_interval` enforced ≥ 1. `word_num` range
+  depends on `ModeState.SYRIS_485` (1–32 normal, 1–4 Syris). `adr` validated
+  0–255 in `_send_command`.
+
+### HW-VX module (`uhfreader18.hwvx`)
+
+- `DeviceConfig` fields hold real types: `IPv4Address` for addresses, `int` for
+  ports and counters, and the module enums (`NetProtocol`, `NetWorkMode`,
+  `BaudRate`, `Parity`, `DataBits`, `Toggle`) for every option. Assign the
+  enum member directly; `"7"`-style strings are rejected by `validate()`.
+- `SearchResult.ip_address` is `IPv4Address | None`; `port_number` is `int`.
+- `HwVxDevice(ip_address: IPv4Address, ...)` and
+  `change_network(new_ip, subnet_mask, gateway_ip)` take `IPv4Address`.
+- Add `DeviceConfig.from_wire()` / `to_wire()`: the only two places protocol
+  strings are interpreted. `get_config()` raises `ValueError` naming every
+  field the firmware returned in a form the model cannot represent.
+- Fix: assigning an `IntEnum` to a config field previously serialized its
+  *name* (`SBRBaudRate.BAUD_115200`) instead of its value (`SBR7`).
+
 ## 0.4.0
 
 - Add `WorkMode`, `WiegandFormat` (bitfield), `ModeState` (bitfield), and

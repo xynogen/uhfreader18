@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+from ipaddress import IPv4Address
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -113,10 +114,22 @@ class TestSearch:
         assert len(results) == 1
         r = results[0]
         assert r.mac_address == "AA:BB:CC:DD:EE:FF"
-        assert r.port_number == "4196"
-        assert r.ip_address == "192.168.1.100"
+        assert r.port_number == 4196
+        assert r.ip_address == IPv4Address("192.168.1.100")
         assert r.username == "admin"
         assert r.device_name == "MyDevice"
+
+    def test_unparseable_port_keeps_device_with_zero(
+        self, networking: HwVxNetworking, mock_socket: MagicMock
+    ) -> None:
+        """A firmware quirk in one field must not hide the whole device."""
+        mock_socket.recvfrom.side_effect = [
+            (b"AAA:BB/notaport", ("192.168.1.100", 65535)),
+            socket.timeout,
+        ]
+        r = networking.search()[0]
+        assert r.mac_address == "AA:BB"
+        assert r.port_number == 0
 
     def test_search_targets_sends_echo_to_each_ip(
         self, networking: HwVxNetworking, mock_socket: MagicMock
