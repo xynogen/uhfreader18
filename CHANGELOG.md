@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+- Add `WorkMode`, `WiegandFormat` (bitfield), `ModeState` (bitfield), and
+  `MemInven` enums.
+- Decode `WorkModeInfo` bytes via properties: `work_mode`, `wiegand_format`,
+  `state_flags`, `mem_target`.
+- Add `uhfreader18.hwvx` sub-package for the HW-VX IP module (UDP config
+  protocol): `HwVxDevice`, `HwVxNetworking`, `DeviceConfig`, `SearchResult`,
+  `SETTINGS`, `UDP_PORT`, and the `NetProtocol`, `NetWorkMode`, `BaudRate`
+  (`.bps`), `Parity`, `DataBits` (`.count`), `Toggle` enums.
+- Enum `str()` now returns the member name instead of the numeric value
+  (restores pre-Python-3.11 behaviour) for all enums.
+
 ## 0.3.0
 
 - Add `ReaderType`, `Protocol` (bitfield), and `FreqBand` enums.

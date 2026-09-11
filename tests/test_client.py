@@ -10,11 +10,15 @@ import pytest
 from uhfreader18 import (
     Command,
     FreqBand,
+    MemInven,
+    ModeState,
     Protocol,
     ReaderInfo,
     ReaderType,
     RfidClient,
     Status,
+    WiegandFormat,
+    WorkMode,
     WorkModeInfo,
     build_heartbeat,
     build_response_frame,
@@ -40,17 +44,6 @@ class FakeSocket:
 
     def close(self) -> None:
         self.closed = True
-
-    def __enter__(self) -> FakeSocket:
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_value: BaseException | None,
-        traceback: object,
-    ) -> None:
-        self.close()
 
 
 def patch_connection(
@@ -425,3 +418,40 @@ class TestReaderInfoDecoding:
         assert info.max_freq_index == 2
         assert info.min_band is FreqBand.CHINESE_2
         assert info.min_freq_index == 0
+
+
+class TestWorkModeDecoding:
+    def _wm(
+        self,
+        *,
+        read_mode: int = 0,
+        wg_mode: int = 0,
+        mode_state: int = 0,
+        mem_inven: int = 0,
+    ) -> WorkModeInfo:
+        return WorkModeInfo(
+            wg_mode, 0, 0, 0, read_mode, mode_state, mem_inven, 0, 0, 0, 0, 0
+        )
+
+    def test_work_mode(self) -> None:
+        assert self._wm(read_mode=0).work_mode is WorkMode.ANSWER
+        assert self._wm(read_mode=1).work_mode is WorkMode.SCAN
+        assert self._wm(read_mode=0b11).work_mode is WorkMode.TRIGGER_HIGH
+
+    def test_wiegand_format(self) -> None:
+        assert self._wm(wg_mode=0).wiegand_format == WiegandFormat(0)
+        wf = self._wm(wg_mode=0b11).wiegand_format
+        assert WiegandFormat.FORMAT_34BIT in wf
+        assert WiegandFormat.LOW_BIT_FIRST in wf
+
+    def test_state_flags(self) -> None:
+        sf = self._wm(mode_state=0b1_0110).state_flags
+        assert ModeState.RS_OUTPUT in sf
+        assert ModeState.BEEP_OFF in sf
+        assert ModeState.SYRIS_485 in sf
+        assert ModeState.PROTOCOL_6B not in sf
+
+    def test_mem_target(self) -> None:
+        assert self._wm(mem_inven=0x01).mem_target is MemInven.EPC
+        assert self._wm(mem_inven=0x06).mem_target is MemInven.EAS_ALARM
+        assert self._wm(mem_inven=0x09).mem_target is None

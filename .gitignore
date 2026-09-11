@@ -16,3 +16,6 @@ uv.lock
 # Pix Agent
 .pi/
 .pi-lens/
+
+# Graph tooling artefacts
+graphify-out/

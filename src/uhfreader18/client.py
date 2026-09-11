@@ -9,7 +9,17 @@ from collections import deque
 from dataclasses import dataclass
 
 from .builder import build_command_frame
-from .constants import Command, FreqBand, Protocol, ReaderType, Status
+from .constants import (
+    Command,
+    FreqBand,
+    MemInven,
+    ModeState,
+    Protocol,
+    ReaderType,
+    Status,
+    WiegandFormat,
+    WorkMode,
+)
 from .frame import Frame, validate_frame
 from .stream import StreamBuffer
 
@@ -117,6 +127,29 @@ class WorkModeInfo:
     tag_time: int
     eas_accuracy: int
     syris_offset: int
+
+    @property
+    def work_mode(self) -> WorkMode:
+        """Reader work mode decoded from read_mode bit1-0."""
+        return WorkMode(self.read_mode & 0b11)
+
+    @property
+    def wiegand_format(self) -> WiegandFormat:
+        """Wiegand format flags decoded from wg_mode."""
+        return WiegandFormat(self.wg_mode & 0b11)
+
+    @property
+    def state_flags(self) -> ModeState:
+        """Work-mode state flags decoded from mode_state."""
+        return ModeState(self.mode_state & 0b1_1111)
+
+    @property
+    def mem_target(self) -> MemInven | None:
+        """Memory/inventory target from mem_inven, or None if out of range."""
+        try:
+            return MemInven(self.mem_inven)
+        except ValueError:
+            return None
 
 
 def parse_response(raw: bytes) -> RfidResponse:

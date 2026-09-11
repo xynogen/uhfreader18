@@ -7,13 +7,12 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("uhfreader18")
 except PackageNotFoundError:  # pragma: no cover
-    __version__ = "0.3.0"
+    __version__ = "0.4.0"
 
 from .builder import (
     build_command_frame,
     build_heartbeat,
     build_response_frame,
-    build_tag_frame,
     is_heartbeat,
 )
 from .checksum import compute_checksum, crc16
@@ -29,9 +28,13 @@ from .constants import (
     FrameError,
     FreqBand,
     MemBank,
+    MemInven,
+    ModeState,
     Protocol,
     ReaderType,
     Status,
+    WiegandFormat,
+    WorkMode,
 )
 from .frame import Frame, Heartbeat, validate_frame
 from .stream import ParseResult, StreamBuffer
@@ -44,6 +47,8 @@ __all__ = [
     "FreqBand",
     "Heartbeat",
     "MemBank",
+    "MemInven",
+    "ModeState",
     "ParseResult",
     "Protocol",
     "ReaderInfo",
@@ -52,12 +57,13 @@ __all__ = [
     "RfidResponse",
     "Status",
     "StreamBuffer",
+    "WiegandFormat",
+    "WorkMode",
     "WorkModeInfo",
     "__version__",
     "build_command_frame",
     "build_heartbeat",
     "build_response_frame",
-    "build_tag_frame",
     "compute_checksum",
     "crc16",
     "hex_readable",

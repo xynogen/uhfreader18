@@ -39,10 +39,6 @@ def build_response_frame(
     return payload + crc16(payload).to_bytes(2, "little")
 
 
-# ponytail: simulator compatibility alias; remove before 1.0 if unused externally.
-build_tag_frame = build_response_frame
-
-
 def build_heartbeat() -> bytes:
     """Build the six-byte heartbeat observed from readers."""
     return bytes([HEARTBEAT_MARKER]) + b"\0" * (HEARTBEAT_LENGTH - 1)
