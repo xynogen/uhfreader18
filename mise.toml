@@ -1,0 +1,31 @@
+[tools]
+python = "3.13"
+uv = "latest"
+ruff = "latest"
+
+[env]
+_.python.venv = { path = ".venv", create = true }
+
+[tasks.install]
+description = "Sync dev environment"
+run = "uv pip install -e '.[dev]'"
+
+[tasks.lint]
+description = "Lint + format check"
+run = ["ruff check src tests", "ruff format --check src tests"]
+
+[tasks.fmt]
+description = "Format code"
+run = "ruff format src tests"
+
+[tasks.typecheck]
+description = "Type check"
+run = "pyright"
+
+[tasks.test]
+description = "Run tests"
+run = "pytest"
+
+[tasks.check]
+description = "Full CI gate: lint + typecheck + test"
+depends = ["lint", "typecheck", "test"]
