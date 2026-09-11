@@ -53,7 +53,7 @@ description = "Test operations (unit|cov|tidy)"
 run = '''
 #!/usr/bin/env bash
 set -euo pipefail
-action="${1:-unit}"
+action="${1:-}"
 if [ -z "$action" ]; then
   echo "Usage: mise run test <action>"
   echo ""
