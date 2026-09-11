@@ -269,7 +269,7 @@ Len | Adr | reCmd | Status | CRC-16 | Num | EPC | ID
 
 0xXX 0xXX 0x01 0xXX 0xXX EPC-1, EPC-2, EPC-3… LSB MSB
 
-**Parameters:** 
+**Parameters:**
 **Status values:**
  Status Connect 0x01 Command over, and return inventoried tag’s EPC (TID). The reader does not get allG2tags’ EPC/TID before user-defined Inventory-ScanTime 0x02 overflows. Command force quit, and returns inventoried tags’ EPC (TID). 0x03 The reader executes anInventorycommand and gets manyG2tags’ EPC (TID). Data
 
@@ -751,9 +751,8 @@ Word\_data:8 bytes. It pointed to the array is used to compare.
 |--- |--- |--- |--- |--- |--- |--- |--- |
 | 0xXX | 0xXX | 0x51 | 0xXX | 0xXX | UID1, UID2… | LSB | MSB |
 
-**Parameters:** 
+**Parameters:**
 **Status values:**
-
 
 Status Connect 0x15 Command over, and return inventoried tag’s UID. The reader does not get all 6B tags’ UID before user-defined Inventory-ScanTime 0x16 overflows. Command force quit, and returns inventoried tags’ UID. The reader executes anInventorycommand and gets many6Btags’ UID. Data can not 0x17 be completed within in a message, and then send in multiple. The reader executes an Inventory command and gets 6B tags’ UID too much, more 0x18 than the storage capacity of reader, and returns inventoried tags’ UID. Num: The number of tag detected. Data \[]:UID. Each UID length is 8 bytes. The least significant byte of UID is transmitted first.
 
