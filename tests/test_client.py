@@ -200,6 +200,150 @@ def test_set_trigger_offset_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sock.sent[0][2:4] == bytes([Command.TRIGGER_OFFSET, 10])
 
 
+# Error branch: reader returns non-SUCCESS status -> RuntimeError, one per setter.
+_SETTER_CALLS: list[tuple[int, Callable[[RfidClient], object]]] = [
+    (Command.SET_ADDRESS, lambda c: c.set_address(0, 1)),
+    (Command.SET_POWER, lambda c: c.set_power(0, 10)),
+    (Command.SET_SCAN_TIME, lambda c: c.set_scan_time(0, 10)),
+    (Command.SET_REGION, lambda c: c.set_region(0, 0x20, 0)),
+    (Command.SET_BAUD_RATE, lambda c: c.set_baud_rate(0, 6)),
+    (Command.ACOUSTO_OPTIC_CONTROL, lambda c: c.acousto_optic_control(0, 1, 1, 1)),
+    (Command.SET_WIEGAND, lambda c: c.set_wiegand(0, 1, 30, 10, 15)),
+    (Command.SET_WORK_MODE, lambda c: c.set_work_mode(0, 0, 2, 1, 0, 4, 0)),
+    (Command.GET_WORK_MODE, lambda c: c.get_work_mode()),
+    (Command.SET_EAS_ACCURACY, lambda c: c.set_eas_accuracy(0, 8)),
+    (Command.SYRIS_RESPONSE_OFFSET, lambda c: c.set_syris_response_offset(0, 10)),
+    (Command.TRIGGER_OFFSET, lambda c: c.set_trigger_offset(0, 10)),
+    (Command.GET_READER_INFO, lambda c: c.get_reader_info()),
+]
+
+
+@pytest.mark.parametrize("command, call", _SETTER_CALLS)
+def test_setter_raises_on_failure_status(
+    monkeypatch: pytest.MonkeyPatch,
+    command: int,
+    call: Callable[[RfidClient], object],
+) -> None:
+    fail = build_response_frame(0, command, Status.PARAMETER_ERROR)
+    sock = FakeSocket([fail])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client, pytest.raises(RuntimeError):
+        call(client)
+
+
+def test_set_power_success_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SET_POWER)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_power(0, 30).ok
+    assert sock.sent[0][2:4] == bytes([Command.SET_POWER, 30])
+
+
+def test_set_scan_time_success_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SET_SCAN_TIME)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_scan_time(0, 100).ok
+    assert sock.sent[0][2:4] == bytes([Command.SET_SCAN_TIME, 100])
+
+
+# Out-of-range rejection for the multi-byte wrappers (byte-range guards).
+_RANGE_REJECTS: list[Callable[[RfidClient], object]] = [
+    lambda c: c.set_region(0, 256, 0),
+    lambda c: c.acousto_optic_control(0, 256, 0, 0),
+    lambda c: c.set_wiegand(0, 256, 0, 0, 0),
+    lambda c: c.set_work_mode(0, 256, 0, 0, 0, 0, 0),
+    lambda c: c.set_trigger_offset(0, 256),
+]
+
+
+@pytest.mark.parametrize("call", _RANGE_REJECTS)
+def test_multibyte_wrappers_reject_out_of_range(
+    call: Callable[[RfidClient], object],
+) -> None:
+    with pytest.raises(ValueError):
+        call(RfidClient("192.0.2.1", 2077))
+
+
+def test_get_work_mode_short_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    short = build_response_frame(0, Command.GET_WORK_MODE, Status.SUCCESS, bytes(5))
+    sock = FakeSocket([short])
+    patch_connection(monkeypatch, sock)
+    with (
+        RfidClient("192.0.2.1", 2077) as client,
+        pytest.raises(ValueError, match="work-mode response length"),
+    ):
+        client.get_work_mode()
+
+
+def test_get_reader_info_short_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    short = build_response_frame(0, Command.GET_READER_INFO, Status.SUCCESS, bytes(3))
+    sock = FakeSocket([short])
+    patch_connection(monkeypatch, sock)
+    with (
+        RfidClient("192.0.2.1", 2077) as client,
+        pytest.raises(ValueError, match="info response length"),
+    ):
+        client.get_reader_info()
+
+
+@pytest.mark.parametrize("port", [0, 65536])
+def test_init_rejects_bad_port(port: int) -> None:
+    with pytest.raises(ValueError, match="port must be"):
+        RfidClient("192.0.2.1", port)
+
+
+def test_init_rejects_non_positive_timeout() -> None:
+    with pytest.raises(ValueError, match="timeout must be positive"):
+        RfidClient("192.0.2.1", 2077, timeout=0)
+
+
+def test_status_text_unknown_code() -> None:
+    from uhfreader18 import RfidResponse
+
+    resp = RfidResponse(5, 0, Command.SET_POWER, 0x77, b"", 0)
+    assert "Unknown" in resp.status_text
+    assert "0x77" in resp.status_text
+
+
+def test_stream_error_while_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A frame with a bad CRC triggers a parse error mid-wait.
+    good = _ok(Command.GET_READER_INFO, INFO_DATA)
+    corrupt = good[:-1] + bytes([good[-1] ^ 0xFF])
+    sock = FakeSocket([corrupt])
+    patch_connection(monkeypatch, sock)
+    with (
+        RfidClient("192.0.2.1", 2077) as client,
+        pytest.raises(ConnectionError),
+    ):
+        client.get_reader_info()
+
+
+def test_set_eas_accuracy_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SET_EAS_ACCURACY)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_eas_accuracy(0, 8).ok
+    assert sock.sent[0][2:4] == bytes([Command.SET_EAS_ACCURACY, 8])
+
+
+def test_set_syris_offset_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([_ok(Command.SYRIS_RESPONSE_OFFSET)])
+    patch_connection(monkeypatch, sock)
+    with RfidClient("192.0.2.1", 2077) as client:
+        assert client.set_syris_response_offset(0, 50).ok
+    assert sock.sent[0][2:4] == bytes([Command.SYRIS_RESPONSE_OFFSET, 50])
+
+
+def test_connect_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    sock = FakeSocket([info_response()])
+    patch_connection(monkeypatch, sock)
+    client = RfidClient("192.0.2.1", 2077)
+    client.connect()
+    client.connect()  # second call returns early, no new socket
+    client.close()
+
+
 def test_not_connected() -> None:
     with pytest.raises(ConnectionError, match="connect"):
         RfidClient("192.0.2.1", 2077).get_reader_info()
