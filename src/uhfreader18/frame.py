@@ -1,6 +1,12 @@
 # pyright: reportMissingImports=false
 # ponytail: parent workspace misses nested src layout; package Pyright stays strict.
-"""UHFReader18 response-frame models and validation."""
+"""UHFReader18 response model and validation.
+
+One model, ``RfidResponse``, is used everywhere: the low-level parser
+(``validate_frame`` / ``StreamBuffer``), the server, and the command client.
+Field names follow the manual's data block (§3.2): ``reader_address`` (Adr),
+``command`` (reCmd), ``status``, ``crc`` (CRC-16).
+"""
 
 from __future__ import annotations
 
@@ -11,15 +17,19 @@ from .constants import MIN_FRAME_LENGTH, Command, FrameError, Status
 
 
 @dataclass(frozen=True)
-class Frame:
-    """Parsed and CRC-validated response frame."""
+class RfidResponse:
+    """A parsed and CRC-validated response frame."""
 
     length: int
     reader_address: int
     command: int
     status: int
     data: bytes
-    checksum: int
+    crc: int
+
+    @property
+    def ok(self) -> bool:
+        return self.status == Status.SUCCESS
 
     @property
     def tag(self) -> str:
@@ -40,12 +50,20 @@ class Frame:
         except ValueError:
             return f"UNKNOWN(0x{self.status:02X})"
 
+    @property
+    def status_text(self) -> str:
+        """Human-readable status (title case), for error messages."""
+        try:
+            return Status(self.status).name.replace("_", " ").title()
+        except ValueError:
+            return f"Unknown (0x{self.status:02X})"
+
     def to_bytes(self) -> bytes:
         payload = (
             bytes([self.length, self.reader_address, self.command, self.status])
             + self.data
         )
-        return payload + self.checksum.to_bytes(2, "little")
+        return payload + self.crc.to_bytes(2, "little")
 
     def hex_readable(self) -> str:
         return self.to_bytes().hex(" ").upper()
@@ -61,7 +79,7 @@ class Heartbeat:
         return self.raw.hex(" ").upper()
 
 
-def validate_frame(raw: bytes) -> Frame:
+def validate_frame(raw: bytes) -> RfidResponse:
     """Parse one complete response frame and verify length and CRC."""
     if not raw:
         raise FrameError("Empty frame")
@@ -80,4 +98,4 @@ def validate_frame(raw: bytes) -> Frame:
         raise FrameError(
             f"CRC mismatch: received 0x{received:04X}, computed 0x{computed:04X}"
         )
-    return Frame(length, raw[1], raw[2], raw[3], raw[4:-2], received)
+    return RfidResponse(length, raw[1], raw[2], raw[3], raw[4:-2], received)

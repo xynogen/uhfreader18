@@ -330,6 +330,35 @@ class TestChangeNetwork:
         assert "SNM255.255.0.0|24" in bcast_cmds
         assert "SIP10.0.0.50|25" in bcast_cmds
 
+    def test_unicast_wire_sequence_is_exact(
+        self, device: HwVxDevice, mock_transport: MagicMock
+    ) -> None:
+        """Byte-exact wire order (C# Form1.cs). Locks it against refactors."""
+        cmds, _ = self._run(device, mock_transport)
+        assert cmds == [
+            "X",
+            "L",
+            "SGI10.0.0.1|23",
+            "SNM255.255.0.0|24",
+            "SIP10.0.0.50|25",
+            "E",
+        ]
+
+    def test_broadcast_wire_sequence_is_exact(
+        self, device: HwVxDevice, mock_transport: MagicMock
+    ) -> None:
+        """Broadcast fallback opens with W{mac} instead of X; rest identical."""
+        _, bcast = self._run(device, mock_transport)
+        bcast_cmds = [c[0][0] for c in bcast.send.call_args_list]
+        assert bcast_cmds == [
+            "WAA:BB:CC:DD:EE:FF",
+            "L",
+            "SGI10.0.0.1|23",
+            "SNM255.255.0.0|24",
+            "SIP10.0.0.50|25",
+            "E",
+        ]
+
 
 class TestSetDhcp:
     def test_enable_dhcp(self, device: HwVxDevice, mock_transport: MagicMock) -> None:

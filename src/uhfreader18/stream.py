@@ -8,12 +8,12 @@ from dataclasses import dataclass, field
 
 from .builder import build_heartbeat
 from .constants import HEARTBEAT_LENGTH, HEARTBEAT_MARKER, MIN_FRAME_LENGTH, FrameError
-from .frame import Frame, Heartbeat, validate_frame
+from .frame import Heartbeat, RfidResponse, validate_frame
 
 
 @dataclass
 class ParseResult:
-    frames: list[Frame] = field(default_factory=lambda: [])
+    frames: list[RfidResponse] = field(default_factory=lambda: [])
     heartbeats: list[Heartbeat] = field(default_factory=lambda: [])
     errors: list[str] = field(default_factory=lambda: [])
 

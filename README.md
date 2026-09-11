@@ -166,8 +166,8 @@ from uhfreader18 import StreamBuffer
 stream = StreamBuffer(allowed_readers={0x00, 0x01})   # allowlist optional
 result = stream.feed(tcp_bytes)                        # -> ParseResult
 
-for frame in result.frames:
-    print(frame.tag, frame.reader_address, frame.command_name, frame.status_name)
+for response in result.frames:
+    print(response.tag, response.reader_address, response.command_name, response.status_name)
 
 for heartbeat in result.heartbeats:
     print("heartbeat", heartbeat.hex_readable())
@@ -176,8 +176,8 @@ for error in result.errors:
     print("protocol error", error)
 ```
 
-`Frame.tag` renders the response data as uppercase hex after removing trailing
-NUL bytes. It stays an opaque report value: available captures do not yet prove
+`RfidResponse.tag` renders the response data as uppercase hex after removing
+trailing NUL bytes. It stays an opaque report value: available captures do not yet prove
 where flags, antenna metadata, EPC, and padding split for every reader.
 
 ### Build Frames
@@ -186,7 +186,7 @@ where flags, antenna metadata, EPC, and padding split for every reader.
 from uhfreader18 import (
     Command, Status,
     build_command_frame, build_response_frame, build_heartbeat,
-    crc16, compute_checksum, validate_frame, parse_response,
+    crc16, validate_frame, parse_response,
 )
 
 cmd = build_command_frame(0x00, Command.GET_READER_INFO)
@@ -194,7 +194,7 @@ report = build_response_frame(
     0x00, Command.TAG_REPORT, Status.SUCCESS,
     bytes.fromhex("2000708C2B380B2D00000000"),
 )
-frame = validate_frame(report)          # -> Frame, raises FrameError on bad CRC/length
+response = validate_frame(report)        # -> RfidResponse, raises FrameError on bad CRC/length
 response = parse_response(report)        # -> RfidResponse
 beat = build_heartbeat()                 # 56 00 00 00 00 00
 ```
@@ -227,7 +227,7 @@ from uhfreader18.hwvx import BaudRate, HwVxDevice, HwVxNetworking, NetWorkMode
 
 # Discover modules on the LAN.
 with HwVxNetworking() as net:
-    for found in net.search():                  # -> list[SearchResult]
+    for found in net.search():                       # -> list[SearchResult]
         print(found.ip_address, found.port_number)   # IPv4Address, int
 
 # Read and change a device's configuration.
@@ -268,16 +268,15 @@ protocol, setting-code table, and field reference.
 | Symbol | Kind | Notes |
 |---|---|---|
 | `RfidClient` | class | TCP command client (see method table above) |
-| `RfidResponse` | dataclass | `.ok`, `.status_text`, `.to_bytes()` |
+| `RfidResponse` | dataclass | Parsed response: `.reader_address`, `.command`, `.status`, `.data`, `.crc`; `.ok`, `.tag`, `.command_name`, `.status_name`, `.status_text`, `.to_bytes()`, `.hex_readable()` |
 | `ReaderInfo` | dataclass | `.reader_model`, `.protocols`, `.band`, `.max_index`, `.min_index`, `.power`, `.scan_time`; `from_bytes()` |
 | `WorkModeInfo` | dataclass | `.work_mode`, `.wiegand_format`, `.state`, `.mem_inven`; fields match setter signatures |
 | `StreamBuffer` | class | Push-stream reassembly; `feed()` -> `ParseResult` |
-| `ParseResult` | dataclass | `.frames`, `.heartbeats`, `.errors` |
-| `Frame` | dataclass | Parsed frame; `.tag`, `.command_name`, `.status_name`, `.hex_readable()` |
+| `ParseResult` | dataclass | `.frames` (list of `RfidResponse`), `.heartbeats`, `.errors` |
 | `Heartbeat` | dataclass | `.hex_readable()` |
 | `FrameError` | exception | Raised by `validate_frame` |
 | `build_command_frame`, `build_response_frame`, `build_heartbeat`, `is_heartbeat` | func | Frame builders |
-| `crc16`, `compute_checksum` | func | CRC-16 helpers |
+| `crc16` | func | CRC-16 helper |
 | `validate_frame`, `parse_response` | func | Frame parsers |
 | `hex_readable` | func | Byte / int → readable hex |
 | `Command`, `Status`, `MemBank`, `ReaderType` | enum | Frame/response protocol constants |

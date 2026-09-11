@@ -13,7 +13,6 @@ from uhfreader18 import (
     build_command_frame,
     build_heartbeat,
     build_response_frame,
-    compute_checksum,
     crc16,
     hex_readable,
     is_heartbeat,
@@ -34,17 +33,32 @@ def test_captured_frame() -> None:
     assert frame.to_bytes() == CAPTURED_FRAME
 
 
-def test_command_frame_uses_little_endian_crc() -> None:
-    raw = build_command_frame(0, Command.GET_READER_INFO)
-    assert raw[:3] == bytes([4, 0, 0x21])
-    assert int.from_bytes(raw[-2:], "little") == crc16(raw[:-2])
+def test_crc16_matches_published_check_value() -> None:
+    # CRC-16/MCRF4XX check value for b"123456789" is 0x6F91 (independent oracle,
+    # not recomputed by this library). Pins poly/init/reflect to the spec.
+    assert crc16(b"123456789") == 0x6F91
+
+
+def test_command_frame_is_byte_exact() -> None:
+    # Whole frame from a known command, CRC included, as a fixed literal so a
+    # CRC or byte-order regression changes the bytes. (Get Reader Info @ adr 0.)
+    assert build_command_frame(0, Command.GET_READER_INFO) == bytes.fromhex(
+        "040021d96a"
+    )
+
+
+def test_valid_frame_has_zero_crc_residue() -> None:
+    # Reader's own validity rule (PROTOCOL.md): CRC over the entire frame,
+    # trailing checksum included, yields 0x0000.
+    raw = build_response_frame(7, Command.SET_POWER, Status.SUCCESS, b"\x1e")
+    assert crc16(raw) == 0
 
 
 def test_response_round_trip() -> None:
     raw = build_response_frame(7, Command.SET_POWER, Status.SUCCESS, b"\x1e")
     response = parse_response(raw)
     assert response.ok
-    assert response.address == 7
+    assert response.reader_address == 7
     assert response.command == Command.SET_POWER
     assert response.data == b"\x1e"
     assert response.to_bytes() == raw
@@ -154,13 +168,6 @@ def test_build_response_frame_invalid_fields() -> None:
         build_response_frame(0, 256, Status.SUCCESS)
     with pytest.raises(ValueError, match="status"):
         build_response_frame(0, Command.GET_READER_INFO, 256)
-
-
-def test_compute_checksum() -> None:
-    raw = build_command_frame(0, Command.GET_READER_INFO)
-    checksum = compute_checksum(raw)
-    expected = int.from_bytes(crc16(raw[:-2]).to_bytes(2, "little"), "big")
-    assert checksum == expected
 
 
 def test_hex_readable_utility() -> None:

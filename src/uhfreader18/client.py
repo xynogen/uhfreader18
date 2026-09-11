@@ -23,50 +23,8 @@ from .constants import (
     WiegandFormat,
     WorkMode,
 )
-from .frame import Frame, validate_frame
+from .frame import RfidResponse, validate_frame
 from .stream import StreamBuffer
-
-
-@dataclass(frozen=True)
-class RfidResponse:
-    length: int
-    address: int
-    command: int
-    status: int
-    data: bytes
-    crc: int
-
-    @classmethod
-    def from_frame(cls, frame: Frame) -> RfidResponse:
-        return cls(
-            frame.length,
-            frame.reader_address,
-            frame.command,
-            frame.status,
-            frame.data,
-            frame.checksum,
-        )
-
-    @property
-    def ok(self) -> bool:
-        return self.status == Status.SUCCESS
-
-    @property
-    def status_text(self) -> str:
-        try:
-            return Status(self.status).name.replace("_", " ").title()
-        except ValueError:
-            return f"Unknown (0x{self.status:02X})"
-
-    def to_bytes(self) -> bytes:
-        return Frame(
-            self.length,
-            self.address,
-            self.command,
-            self.status,
-            self.data,
-            self.crc,
-        ).to_bytes()
 
 
 @dataclass(frozen=True)
@@ -153,7 +111,7 @@ class WorkModeInfo:
 
 def parse_response(raw: bytes) -> RfidResponse:
     """Parse one complete command response."""
-    return RfidResponse.from_frame(validate_frame(raw))
+    return validate_frame(raw)
 
 
 # ── input validation (the boundary between business code and the wire) ──
@@ -208,7 +166,7 @@ class RfidClient:
         self.timeout = timeout
         self._socket: socket.socket | None = None
         self._stream = StreamBuffer()
-        self._responses: deque[Frame] = deque()
+        self._responses: deque[RfidResponse] = deque()
 
     def connect(self) -> None:
         if self._socket is not None:
@@ -265,13 +223,20 @@ class RfidClient:
                 f"Unexpected response command 0x{frame.command:02X}; "
                 f"expected 0x{command:02X}"
             )
-        return RfidResponse.from_frame(frame)
+        return frame
+
+    def _run(
+        self, adr: int, command: Command, data: bytes = b"", *, action: str
+    ) -> RfidResponse:
+        """Send a command and raise ``RuntimeError`` unless the reader reports OK."""
+        response = self._send_command(adr, command, data)
+        if not response.ok:
+            raise RuntimeError(f"{action} failed: {response.status_text}")
+        return response
 
     def get_reader_info(self, adr: int = 0) -> ReaderInfo:
-        response = self._send_command(adr, Command.GET_READER_INFO)
-        if not response.ok:
-            raise RuntimeError(f"Get reader info failed: {response.status_text}")
-        return ReaderInfo.from_bytes(response.address, response.data)
+        response = self._run(adr, Command.GET_READER_INFO, action="Get reader info")
+        return ReaderInfo.from_bytes(response.reader_address, response.data)
 
     def discover_address(self) -> tuple[ReaderInfo, int]:
         try:
@@ -285,28 +250,21 @@ class RfidClient:
     def set_address(self, current_adr: int, new_adr: int) -> RfidResponse:
         """Change reader address (0x24). 0xFF is reserved for broadcast."""
         _require_range(new_adr, 0x00, 0xFE, "new_adr")
-        response = self._send_command(
-            current_adr, Command.SET_ADDRESS, bytes([new_adr])
+        return self._run(
+            current_adr, Command.SET_ADDRESS, bytes([new_adr]), action="Set address"
         )
-        if not response.ok:
-            raise RuntimeError(f"Set address failed: {response.status_text}")
-        return response
 
     def set_power(self, adr: int, power: int) -> RfidResponse:
         """Set RF output power (0x2F), 0-30 dBm."""
         _require_range(power, 0, 30, "power")
-        response = self._send_command(adr, Command.SET_POWER, bytes([power]))
-        if not response.ok:
-            raise RuntimeError(f"Set power failed: {response.status_text}")
-        return response
+        return self._run(adr, Command.SET_POWER, bytes([power]), action="Set power")
 
     def set_scan_time(self, adr: int, scan_time: int) -> RfidResponse:
         """Set inventory scan time (0x25), 3-255 x 100 ms (manual 8.4.4)."""
         _require_range(scan_time, 3, 255, "scan_time")
-        response = self._send_command(adr, Command.SET_SCAN_TIME, bytes([scan_time]))
-        if not response.ok:
-            raise RuntimeError(f"Set scan time failed: {response.status_text}")
-        return response
+        return self._run(
+            adr, Command.SET_SCAN_TIME, bytes([scan_time]), action="Set scan time"
+        )
 
     def set_region(
         self, adr: int, band: FreqBand, max_index: int, min_index: int
@@ -319,21 +277,20 @@ class RfidClient:
         _require_range(min_index, 0, band.max_index, "min_index")
         if min_index > max_index:
             raise ValueError(f"min_index {min_index} exceeds max_index {max_index}")
-        response = self._send_command(
-            adr, Command.SET_REGION, band.pack(max_index, min_index)
+        return self._run(
+            adr,
+            Command.SET_REGION,
+            band.pack(max_index, min_index),
+            action="Set region",
         )
-        if not response.ok:
-            raise RuntimeError(f"Set region failed: {response.status_text}")
-        return response
 
     def set_baud_rate(self, adr: int, baud: ReaderBaudRate) -> RfidResponse:
         """Set serial baud rate (0x28). Nonvolatile; the response arrives at
         the OLD rate, the next command must use the new one."""
         _require(baud, ReaderBaudRate, "baud")
-        response = self._send_command(adr, Command.SET_BAUD_RATE, bytes([baud]))
-        if not response.ok:
-            raise RuntimeError(f"Set baud rate failed: {response.status_text}")
-        return response
+        return self._run(
+            adr, Command.SET_BAUD_RATE, bytes([baud]), action="Set baud rate"
+        )
 
     def acousto_optic_control(
         self, adr: int, active_t: int, silent_t: int, times: int
@@ -343,12 +300,12 @@ class RfidClient:
         _require_range(active_t, 0, 0xFF, "active_t")
         _require_range(silent_t, 0, 0xFF, "silent_t")
         _require_range(times, 0, 0xFF, "times")
-        response = self._send_command(
-            adr, Command.ACOUSTO_OPTIC_CONTROL, bytes([active_t, silent_t, times])
+        return self._run(
+            adr,
+            Command.ACOUSTO_OPTIC_CONTROL,
+            bytes([active_t, silent_t, times]),
+            action="Acousto-optic control",
         )
-        if not response.ok:
-            raise RuntimeError(f"Acousto-optic control failed: {response.status_text}")
-        return response
 
     def set_wiegand(
         self,
@@ -365,14 +322,12 @@ class RfidClient:
         _require_range(data_interval, 0, 0xFF, "data_interval")
         _require_range(pulse_width, 1, 0xFF, "pulse_width")
         _require_range(pulse_interval, 1, 0xFF, "pulse_interval")
-        response = self._send_command(
+        return self._run(
             adr,
             Command.SET_WIEGAND,
             bytes([wg_format, data_interval, pulse_width, pulse_interval]),
+            action="Set Wiegand",
         )
-        if not response.ok:
-            raise RuntimeError(f"Set Wiegand failed: {response.status_text}")
-        return response
 
     def set_work_mode(
         self,
@@ -396,41 +351,34 @@ class RfidClient:
         _require_range(word_num, 1, word_max, "word_num")
         _require_range(tag_time, 0, 0xFF, "tag_time")
         params = bytes([work_mode, state, mem_inven, first_adr, word_num, tag_time])
-        response = self._send_command(adr, Command.SET_WORK_MODE, params)
-        if not response.ok:
-            raise RuntimeError(f"Set work mode failed: {response.status_text}")
-        return response
+        return self._run(adr, Command.SET_WORK_MODE, params, action="Set work mode")
 
     def get_work_mode(self, adr: int = 0) -> WorkModeInfo:
         """Read Wiegand + work-mode parameters (0x36)."""
-        response = self._send_command(adr, Command.GET_WORK_MODE)
-        if not response.ok:
-            raise RuntimeError(f"Get work mode failed: {response.status_text}")
+        response = self._run(adr, Command.GET_WORK_MODE, action="Get work mode")
         return WorkModeInfo.from_bytes(response.data)
 
     def set_eas_accuracy(self, adr: int, accuracy: int) -> RfidResponse:
         """Set EAS alarm accuracy (0x37), range 0-8, default 8."""
         _require_range(accuracy, 0, 8, "accuracy")
-        response = self._send_command(adr, Command.SET_EAS_ACCURACY, bytes([accuracy]))
-        if not response.ok:
-            raise RuntimeError(f"Set EAS accuracy failed: {response.status_text}")
-        return response
+        return self._run(
+            adr, Command.SET_EAS_ACCURACY, bytes([accuracy]), action="Set EAS accuracy"
+        )
 
     def set_syris_response_offset(self, adr: int, offset_ms: int) -> RfidResponse:
         """Set Syris485 response offset (0x38), (0-100) x1ms, default 0."""
         _require_range(offset_ms, 0, 100, "offset_ms")
-        response = self._send_command(
-            adr, Command.SYRIS_RESPONSE_OFFSET, bytes([offset_ms])
+        return self._run(
+            adr,
+            Command.SYRIS_RESPONSE_OFFSET,
+            bytes([offset_ms]),
+            action="Set Syris offset",
         )
-        if not response.ok:
-            raise RuntimeError(f"Set Syris offset failed: {response.status_text}")
-        return response
 
     def set_trigger_offset(self, adr: int, trigger_s: int) -> RfidResponse:
         """Set trigger offset (0x3B), (0-254) x1s; 255 queries current value.
         Firmware V2.36+ only."""
         _require_range(trigger_s, 0, 0xFF, "trigger_s")
-        response = self._send_command(adr, Command.TRIGGER_OFFSET, bytes([trigger_s]))
-        if not response.ok:
-            raise RuntimeError(f"Set trigger offset failed: {response.status_text}")
-        return response
+        return self._run(
+            adr, Command.TRIGGER_OFFSET, bytes([trigger_s]), action="Set trigger offset"
+        )

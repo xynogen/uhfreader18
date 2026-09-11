@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.6.0
+
+**Breaking:**
+
+- **One response model.** `Frame` is gone; `RfidResponse` is now the single
+  model used everywhere (parser, `StreamBuffer`, server, client). `RfidResponse`
+  moved to `uhfreader18.frame` and gained `Frame`'s members (`.tag`,
+  `.command_name`, `.status_name`, `.hex_readable()`) alongside its own (`.ok`,
+  `.status_text`). Fields follow the manual's data block (§3.2):
+  `reader_address` (was `address`) and `crc` (was `checksum`). `validate_frame`
+  now returns `RfidResponse`.
+- **Removed `compute_checksum`.** It was an unused byte-swapped wrapper over
+  `crc16`; use `crc16` directly (wire order is little-endian, handled by the
+  frame builders).
+
+### Internal
+
+- `RfidClient` command methods share a single `_run` helper for the
+  send/check-status/raise flow (no behavior change).
+- `change_network` unicast and broadcast passes share a single `_push_network`
+  helper; the wire byte sequence is unchanged and locked by characterization
+  tests.
+- CRC tests now assert against an independent oracle (CRC-16/MCRF4XX check
+  value `0x6F91`, byte-exact frame literals) instead of recomputing with the
+  function under test.
+- pytest output defaults to `-v` (full test names).
+
 ## 0.5.0
 
 **Breaking:** strongly-typed models with input validation everywhere.

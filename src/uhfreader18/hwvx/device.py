@@ -184,41 +184,45 @@ class HwVxDevice:
         Taking ``IPv4Address`` (not ``str``) means an invalid address cannot
         reach this method: the constructor already rejected it.
         """
-        s = self.net.send
-
-        # Unicast
-        s("X")
-        time.sleep(0.1)
-        s("L")
-        time.sleep(0.05)
-        self.net.receive()  # drain reply
-        s(f"SGI{gateway_ip}|23")
-        time.sleep(0.1)
-        s(f"SNM{subnet_mask}|24")
-        time.sleep(0.1)
-        s(f"SIP{new_ip}|25")
-        time.sleep(0.1)
-        self.net.receive()
-        s("E")
-        time.sleep(0.2)
+        self._push_network(self.net, "X", new_ip, subnet_mask, gateway_ip)
 
         if self.broadcast:
             return
 
-        # Broadcast fallback
+        # Broadcast fallback (IP may have already changed, so re-select by MAC)
         with HwVxNetworking(str(self.broadcast_ip)) as broadcast:
-            broadcast.send(f"W{self.mac}")
-            time.sleep(0.1)
-            broadcast.send("L")
-            time.sleep(0.05)
-            broadcast.send(f"SGI{gateway_ip}|23")
-            time.sleep(0.1)
-            broadcast.send(f"SNM{subnet_mask}|24")
-            time.sleep(0.1)
-            broadcast.send(f"SIP{new_ip}|25")
-            time.sleep(0.1)
-            broadcast.receive()
-            broadcast.send("E")
+            self._push_network(
+                broadcast, f"W{self.mac}", new_ip, subnet_mask, gateway_ip
+            )
+
+    @staticmethod
+    def _push_network(
+        net: HwVxNetworking,
+        opener: str,
+        new_ip: IPv4Address,
+        subnet_mask: IPv4Address,
+        gateway_ip: IPv4Address,
+    ) -> None:
+        """Emit opener, login, gateway/mask/IP (IP last), then reboot.
+
+        Wire order matches the C# Form1.cs flow and is locked by
+        ``test_*_wire_sequence_is_exact``. IP goes last so the channel stays
+        valid until the final set command.
+        """
+        net.send(opener)
+        time.sleep(0.1)
+        net.send("L")
+        time.sleep(0.05)
+        net.receive()  # drain reply
+        net.send(f"SGI{gateway_ip}|23")
+        time.sleep(0.1)
+        net.send(f"SNM{subnet_mask}|24")
+        time.sleep(0.1)
+        net.send(f"SIP{new_ip}|25")
+        time.sleep(0.1)
+        net.receive()
+        net.send("E")
+        time.sleep(0.2)
 
     def set_dhcp(self, enabled: bool) -> None:
         """Enable / disable DHCP and reboot."""

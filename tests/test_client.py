@@ -408,6 +408,9 @@ def test_set_scan_time_success_path(monkeypatch: pytest.MonkeyPatch) -> None:
 # Out-of-range rejection for the multi-byte wrappers (byte-range guards).
 _RANGE_REJECTS: list[Callable[[RfidClient], object]] = [
     lambda c: c.acousto_optic_control(0, 256, 0, 0),
+    lambda c: c.acousto_optic_control(0, -1, 0, 0),
+    lambda c: c.acousto_optic_control(0, 0, 256, 0),
+    lambda c: c.acousto_optic_control(0, 0, 0, 256),
     lambda c: c.set_wiegand(0, WiegandFormat(0), 256, 0, 0),
     lambda c: c.set_work_mode(
         0, WorkMode.ANSWER, ModeState(0), MemInven.EPC, 256, 0, 0
