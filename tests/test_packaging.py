@@ -39,8 +39,13 @@ def test_package_version_matches_local() -> None:
     assert uhfreader18.__version__ == _local_version()
 
 
-def test_version_ahead_of_published() -> None:
-    """Release gate: local version must exceed the published PyPI version.
+def test_version_not_behind_published() -> None:
+    """Local version must never be behind the published PyPI version.
+
+    Equal is fine (just released, or between releases); only a local version
+    *behind* PyPI is a regression. The "is this exact version already
+    published" release gate lives in the publish workflow, not here, so this
+    stays green on main after a release.
 
     Skips when PyPI is unreachable (offline dev) or the package is unpublished.
     """
@@ -50,7 +55,6 @@ def test_version_ahead_of_published() -> None:
     except (urllib.error.URLError, TimeoutError, OSError) as exc:  # pragma: no cover
         pytest.skip(f"PyPI unreachable: {exc}")
 
-    assert Version(_local_version()) > Version(published), (
-        f"local version {_local_version()} must be greater than "
-        f"published {published} before release"
+    assert Version(_local_version()) >= Version(published), (
+        f"local version {_local_version()} is behind published {published}"
     )
