@@ -12,6 +12,10 @@
   (`.bps`), `Parity`, `DataBits` (`.count`), `Toggle` enums.
 - Enum `str()` now returns the member name instead of the numeric value
   (restores pre-Python-3.11 behaviour) for all enums.
+- Split `docs/` per protocol: `docs/uhfreader18/` (RFID air-interface) and
+  `docs/hwvx_module/` (HW-VX UDP config).
+- Rewrite README as a full reference: two-protocol overview, method tables, and
+  a complete API listing for both packages.
 
 ## 0.3.0
 
