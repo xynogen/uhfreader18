@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Expose `__version__` on top-level `uhfreader18` package.
+- Consolidate Pyright configuration into `pyproject.toml`.
+- Expand test coverage for CLI parser, client handler, frame helpers, and checksum.
+- Update GitHub Actions workflow action dependencies.
+
 ## 0.2.0
 
 - Add reader-config wrappers on `RfidClient`, covering every reader-defined

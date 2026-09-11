@@ -2,6 +2,13 @@
 # ponytail: parent workspace misses nested src layout; package Pyright stays strict.
 """UHFReader18 command, response, and push-stream protocol library."""
 
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("uhfreader18")
+except PackageNotFoundError:  # pragma: no cover
+    __version__ = "0.2.1"
+
 from .builder import (
     build_command_frame,
     build_heartbeat,
@@ -35,6 +42,7 @@ __all__ = [
     "Status",
     "StreamBuffer",
     "WorkModeInfo",
+    "__version__",
     "build_command_frame",
     "build_heartbeat",
     "build_response_frame",

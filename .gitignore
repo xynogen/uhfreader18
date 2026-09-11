@@ -12,3 +12,7 @@ dist/
 
 # uv
 uv.lock
+
+# Pix Agent
+.pi/
+.pi-lens/

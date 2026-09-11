@@ -33,6 +33,12 @@ def test_distribution_metadata() -> None:
     assert (ROOT / "src/uhfreader18/py.typed").is_file()
 
 
+def test_package_version_matches_local() -> None:
+    import uhfreader18
+
+    assert uhfreader18.__version__ == _local_version()
+
+
 def test_version_ahead_of_published() -> None:
     """Release gate: local version must exceed the published PyPI version.
 

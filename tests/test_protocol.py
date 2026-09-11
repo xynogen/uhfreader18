@@ -7,12 +7,16 @@ import pytest
 from uhfreader18 import (
     Command,
     FrameError,
+    Heartbeat,
     Status,
     StreamBuffer,
     build_command_frame,
     build_heartbeat,
     build_response_frame,
+    compute_checksum,
     crc16,
+    hex_readable,
+    is_heartbeat,
     parse_response,
     validate_frame,
 )
@@ -93,3 +97,72 @@ def test_stream_reader_allowlist() -> None:
 
 def test_heartbeat_builder() -> None:
     assert build_heartbeat() == HEARTBEAT
+
+
+def test_is_heartbeat() -> None:
+    assert is_heartbeat(HEARTBEAT)
+    assert not is_heartbeat(b"\x56\x00")
+    assert not is_heartbeat(b"\x56\x01\x00\x00\x00\x00")
+
+
+def test_partial_heartbeat_waits_for_more_bytes() -> None:
+    stream = StreamBuffer()
+    result = stream.feed(b"\x56\x00")
+    assert stream.pending_bytes == 2
+    assert result.frames == []
+    assert result.heartbeats == []
+
+
+def test_frame_unknown_names_and_hex_readable() -> None:
+    raw = build_response_frame(0, 0x99, 0x88, b"\x01")
+    frame = validate_frame(raw)
+    assert frame.command_name == "UNKNOWN(0x99)"
+    assert frame.status_name == "UNKNOWN(0x88)"
+    assert frame.hex_readable() == raw.hex(" ").upper()
+
+    heartbeat = Heartbeat(HEARTBEAT)
+    assert heartbeat.hex_readable() == HEARTBEAT.hex(" ").upper()
+
+
+@pytest.mark.parametrize(
+    ("bad_frame", "match"),
+    [
+        (b"", "Empty frame"),
+        (b"\x03\x00\x00\x00", "Length too small"),
+        (b"\x0a\x00\x00\x00\x00", "Length mismatch"),
+    ],
+)
+def test_validate_frame_invalid_lengths(bad_frame: bytes, match: str) -> None:
+    with pytest.raises(FrameError, match=match):
+        validate_frame(bad_frame)
+
+
+def test_build_command_frame_oversize_data() -> None:
+    with pytest.raises(ValueError, match="data cannot exceed 251 bytes"):
+        build_command_frame(0, Command.GET_READER_INFO, b"\x00" * 252)
+
+
+def test_build_response_frame_oversize_data() -> None:
+    with pytest.raises(ValueError, match="data cannot exceed 250 bytes"):
+        build_response_frame(0, Command.GET_READER_INFO, Status.SUCCESS, b"\x00" * 251)
+
+
+def test_build_response_frame_invalid_fields() -> None:
+    with pytest.raises(ValueError, match="reader_address"):
+        build_response_frame(256, Command.GET_READER_INFO, Status.SUCCESS)
+    with pytest.raises(ValueError, match="command"):
+        build_response_frame(0, 256, Status.SUCCESS)
+    with pytest.raises(ValueError, match="status"):
+        build_response_frame(0, Command.GET_READER_INFO, 256)
+
+
+def test_compute_checksum() -> None:
+    raw = build_command_frame(0, Command.GET_READER_INFO)
+    checksum = compute_checksum(raw)
+    expected = int.from_bytes(crc16(raw[:-2]).to_bytes(2, "little"), "big")
+    assert checksum == expected
+
+
+def test_hex_readable_utility() -> None:
+    assert hex_readable(0xAB) == "AB"
+    assert hex_readable(b"\x01\x02\x03", separator="-") == "01-02-03"
